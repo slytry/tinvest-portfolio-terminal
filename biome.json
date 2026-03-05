@@ -1,0 +1,13 @@
+{
+  "linter": {
+    "rules": {
+      "style": {
+        "useConsistentTypeDefinitions": {
+          "options": {
+            "style": "type"
+          }
+        }
+      }
+    }
+  }
+}

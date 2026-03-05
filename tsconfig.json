@@ -6,6 +6,15 @@
     "strict": true,
     "jsx": "react-jsx",
     "skipLibCheck": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "~shared/*": [
+        "src/shared/*"
+      ],
+      "~pages/*": [
+        "src/pages/*",
+      ]
+    }
   }
 }
