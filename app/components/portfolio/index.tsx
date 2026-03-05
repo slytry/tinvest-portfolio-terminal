@@ -1,9 +1,9 @@
+import type { PortfolioResponse } from "@tinkoff/invest-js-grpc-web";
 import { useMemo, useState } from "react";
-import "./styles.css";
-import type { AccountPortfolio } from "../../shared/api";
+import type { AccountPortfolio } from "~/shared/api";
 
 type Props = {
-  portfolios: AccountPortfolio;
+  portfolios: PortfolioResponse[];
   title?: string;
   showSummaryCards?: boolean;
 };

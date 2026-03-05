@@ -1,0 +1,7 @@
+@import '@mantine/core/styles.css';
+
+html,
+body {
+  height: 100%;
+  /*background-image: linear-gradient(90deg, #ffffff 0%, #ffffff 33%, #0139A6 33%, #0139A6 66%, #D52B1E 66%);*/
+}

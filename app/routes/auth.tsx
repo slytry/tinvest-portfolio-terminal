@@ -1,15 +1,15 @@
 import { Button, Paper, TextInput, Title } from "@mantine/core";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { setToken } from "../../shared/auth";
+import type { Route } from "./+types/auth";
 
-export function AuthPage() {
-  const [token, setTokenValue] = useState("");
+export default function AuthPage() {
+  const [token, setToken] = useState("");
   const navigate = useNavigate();
 
   function handleLogin() {
-    setToken(token);
-    navigate("/portfolio");
+    localStorage.setItem("token", token);
+    navigate("/");
   }
 
   return (
@@ -20,7 +20,7 @@ export function AuthPage() {
 
       <TextInput
         label="API Token"
-        onChange={(e) => setTokenValue(e.currentTarget.value)}
+        onChange={(e) => setToken(e.currentTarget.value)}
         value={token}
       />
 

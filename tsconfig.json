@@ -1,20 +1,39 @@
 {
+  "include": [
+    "**/*",
+    "**/.server/**/*",
+    "**/.client/**/*",
+    ".react-router/types/**/*"
+  ],
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "target": "ES2022",
+    "module": "ES2022",
     "moduleResolution": "bundler",
-    "strict": true,
     "jsx": "react-jsx",
-    "skipLibCheck": true,
-    "esModuleInterop": true,
+    "rootDirs": [
+      ".",
+      "./.react-router/types"
+    ],
     "baseUrl": ".",
     "paths": {
-      "~shared/*": [
-        "src/shared/*"
-      ],
-      "~pages/*": [
-        "src/pages/*",
+      "~/*": [
+        "./app/*"
       ]
-    }
+    },
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true
   }
 }
