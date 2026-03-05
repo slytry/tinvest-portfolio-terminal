@@ -1,0 +1,32 @@
+{
+  "name": "tinvest-portfolio-terminal",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "ultracite check",
+    "fix": "ultracite fix"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
+    "@tinkoff/invest-js": "^1.27.1-RC4",
+    "chart.js": "^4.5.1",
+    "dayjs": "^1.11.19",
+    "react": "^19.2.4",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.4",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "typescript": "^5.9.3",
+    "ultracite": "^7.2.4",
+    "vite": "^7.3.1"
+  }
+}
