@@ -19,36 +19,11 @@ export type ExtPosition = {
 	instrument: InstrumentResponse;
 };
 
-const getAccounts = () => {
-	const accs = [
-		{
-			id: "2186762886",
-			type: 1,
-			name: "HOMD",
-			status: 2,
-			openedDate: "2024-09-03T00:00:00.000Z",
-			closedDate: "1970-01-01T00:00:00.000Z",
-			accessLevel: 2,
-		},
-		{
-			id: "2160418950",
-			type: 2,
-			name: "PENSION_IIS",
-			status: 2,
-			openedDate: "2024-05-17T00:00:00.000Z",
-			closedDate: "1970-01-01T00:00:00.000Z",
-			accessLevel: 2,
-		},
-	];
-
-	// const accountsResponse = await client.users.getAccounts({});
-
-	return accs;
-};
-
 export const portfolios = async (): Promise<AccountPortfolio[]> => {
+	const accountsResponse = await api.users.getAccounts({});
+
 	const result = await Promise.all(
-		getAccounts().map(async (account) => {
+		accountsResponse.accounts.map(async (account) => {
 			const portfolio = await api.operations.getPortfolio({
 				accountId: account.id,
 			});
