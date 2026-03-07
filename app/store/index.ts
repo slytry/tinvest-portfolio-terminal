@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AccountPortfolio } from "../api/client";
+import type { AccountPortfolio } from "~/api/portfolios";
 
 interface State {
 	positions: AccountPortfolio[];
