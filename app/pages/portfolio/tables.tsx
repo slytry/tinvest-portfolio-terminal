@@ -227,7 +227,7 @@ export const PositionsTable = () => {
 	};
 
 	const portfoliosWithGroupedPositions =
-		portfolios?.map((portfolioData) => {
+		portfolios?.map((portfolioData, index) => {
 			const positionsByType: Record<string, any[]> = {
 				share: [],
 				bond: [],
@@ -274,20 +274,26 @@ export const PositionsTable = () => {
 				if (positionsByType[type]) positionsByType[type].push(position);
 			});
 
+			const rawName = portfolioData.positions[0]?.accountName;
+			const accountName = rawName && rawName.trim().length > 0
+				? rawName
+				: `Счёт #${index + 1}`;
+
 			return {
-				accountName: portfolioData.positions[0]?.accountName || "Unknown",
+				id: `${index}`,
+				accountName,
 				positionsByType,
 			};
 		}) ?? [];
 
 	const [selectedPortfolio, setSelectedPortfolio] = useState(
-		portfoliosWithGroupedPositions[0]?.accountName,
+		portfoliosWithGroupedPositions[0]?.id,
 	);
 
 	if (!portfolios) return null;
 
 	const portfolio = portfoliosWithGroupedPositions.find(
-		(p) => p.accountName === selectedPortfolio,
+		(p) => p.id === selectedPortfolio,
 	);
 
 	if (!portfolio) return null;
@@ -348,7 +354,7 @@ export const PositionsTable = () => {
 					label="Accounts"
 					data={portfoliosWithGroupedPositions.map((p) => ({
 						label: p.accountName,
-						value: p.accountName,
+						value: p.id,
 					}))}
 					value={selectedPortfolio}
 					onChange={(v) => setSelectedPortfolio(v!)}
