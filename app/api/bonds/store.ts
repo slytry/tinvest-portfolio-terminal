@@ -1,20 +1,16 @@
-import { action, atom, wrap } from "@reatom/core";
+import { action, atom, computed, wrap } from "@reatom/core";
 import { bondsApi } from "./bonds";
 import type { Bond, BondsData } from "./types";
 
 const CACHE_DURATION_MS = 5 * 60 * 1000;
 
-export const bondsDataAtom = atom<BondsData | null>(null, "bondsDataAtom");
-export const bondsMapAtom = atom<Record<string, Bond> | null>(
-	null,
-	"bondsMapAtom",
-);
-export const bondsIsLoadingAtom = atom(false, "bondsIsLoadingAtom");
-export const bondsErrorAtom = atom<string | null>(null, "bondsErrorAtom");
-export const bondsLastFetchTimeAtom = atom<number | null>(
-	null,
-	"bondsLastFetchTimeAtom",
-);
+type BondsState = {
+	data: BondsData | null;
+	map: Record<string, Bond> | null;
+	isLoading: boolean;
+	error: string | null;
+	lastFetchTime: number | null;
+};
 
 const toBondsMap = (data: BondsData): Record<string, Bond> => {
 	const map: Record<string, Bond> = {};
@@ -27,43 +23,79 @@ const toBondsMap = (data: BondsData): Record<string, Bond> => {
 	return map;
 };
 
-const getBond = (bondsMap: Record<string, Bond> | null, isin: string, name: string) =>
-	bondsMap?.[isin] || bondsMap?.[name] || null;
+const getBond = (
+	bondsMap: Record<string, Bond> | null,
+	isin: string,
+	name: string,
+) => bondsMap?.[isin] || bondsMap?.[name] || null;
 
-export const fetchBonds = action(async (force = false) => {
-	const now = Date.now();
-	const lastFetchTime = bondsLastFetchTimeAtom();
-	const bondsData = bondsDataAtom();
+export const bondsModel = atom<BondsState>(
+	{
+		data: null,
+		map: null,
+		isLoading: false,
+		error: null,
+		lastFetchTime: null,
+	},
+	"bondsModel",
+).extend((target) => ({
+	fetch: action(async (force = false) => {
+		const now = Date.now();
+		const current = target();
 
-	if (
-		!force &&
-		bondsData &&
-		lastFetchTime &&
-		now - lastFetchTime < CACHE_DURATION_MS
-	) {
-		return;
-	}
-
-	bondsIsLoadingAtom.set(true);
-	bondsErrorAtom.set(null);
-
-	try {
-		const data = await wrap(bondsApi.getLatestBonds());
-
-		if (!data) {
-			bondsErrorAtom.set("Failed to fetch bonds data");
+		if (
+			!force &&
+			current.data &&
+			current.lastFetchTime &&
+			now - current.lastFetchTime < CACHE_DURATION_MS
+		) {
 			return;
 		}
 
-		bondsDataAtom.set(data);
-		bondsMapAtom.set(toBondsMap(data));
-		bondsLastFetchTimeAtom.set(now);
-	} catch (error) {
-		bondsErrorAtom.set(error instanceof Error ? error.message : "Unknown error");
-	} finally {
-		bondsIsLoadingAtom.set(false);
-	}
-}, "fetchBonds");
+		target.set((state) => ({ ...state, isLoading: true, error: null }));
+
+		try {
+			const data = await wrap(bondsApi.getLatestBonds());
+
+			if (!data) {
+				target.set((state) => ({
+					...state,
+					error: "Failed to fetch bonds data",
+					isLoading: false,
+				}));
+				return;
+			}
+
+			target.set((state) => ({
+				...state,
+				data,
+				map: toBondsMap(data),
+				lastFetchTime: now,
+				isLoading: false,
+			}));
+		} catch (error) {
+			target.set((state) => ({
+				...state,
+				error: error instanceof Error ? error.message : "Unknown error",
+				isLoading: false,
+			}));
+		}
+	}, "bondsModel.fetch"),
+}));
+
+export const bondsDataAtom = computed(() => bondsModel().data, "bondsDataAtom");
+export const bondsMapAtom = computed(() => bondsModel().map, "bondsMapAtom");
+export const bondsIsLoadingAtom = computed(
+	() => bondsModel().isLoading,
+	"bondsIsLoadingAtom",
+);
+export const bondsErrorAtom = computed(() => bondsModel().error, "bondsErrorAtom");
+export const bondsLastFetchTimeAtom = computed(
+	() => bondsModel().lastFetchTime,
+	"bondsLastFetchTimeAtom",
+);
+
+export const fetchBonds = bondsModel.fetch;
 
 export const enrichPositionWithBondData = <
 	T extends {

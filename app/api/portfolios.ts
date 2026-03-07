@@ -1,13 +1,10 @@
+import { action, atom, computed, wrap } from "@reatom/core";
 import type {
 	InstrumentResponse,
 	PortfolioPosition,
 	PortfolioResponse,
 } from "@tinkoff/invest-js-grpc-web";
-import { action, atom, computed, wrap } from "@reatom/core";
-import {
-	bondsMapAtom,
-	fetchBonds,
-} from "./bonds/store";
+import { bondsMapAtom, fetchBonds } from "./bonds/store";
 import { api } from "./client";
 import { instrumentByUID } from "./instrumentByUID";
 
@@ -25,6 +22,13 @@ export type ExtPosition = {
 	bondYtm?: number;
 	bondMaturity?: string;
 	bondData?: unknown;
+};
+
+type PortfoliosState = {
+	data: AccountPortfolio[] | null;
+	isLoading: boolean;
+	error: string | null;
+	isEnriched: boolean;
 };
 
 export const portfolios = async (): Promise<AccountPortfolio[]> => {
@@ -50,66 +54,101 @@ export const portfolios = async (): Promise<AccountPortfolio[]> => {
 	);
 };
 
-export const portfoliosAtom = atom<AccountPortfolio[] | null>(null, "portfoliosAtom");
-export const portfoliosIsLoadingAtom = atom(true, "portfoliosIsLoadingAtom");
-export const portfoliosErrorAtom = atom<string | null>(null, "portfoliosErrorAtom");
-export const portfoliosIsEnrichedAtom = atom(false, "portfoliosIsEnrichedAtom");
+export const portfoliosModel = atom<PortfoliosState>(
+	{
+		data: null,
+		isLoading: true,
+		error: null,
+		isEnriched: false,
+	},
+	"portfoliosModel",
+).extend((target) => {
+	const enrichWithBondsData = action(() => {
+		const items = target().data;
+		const bondsMap = bondsMapAtom();
 
-export const enrichWithBondsData = action(() => {
-	const items = portfoliosAtom();
-	const bondsMap = bondsMapAtom();
+		if (!items || !bondsMap) return;
 
-	if (!items || !bondsMap) return;
+		const enrichedPortfolios = items.map((portfolio) => ({
+			...portfolio,
+			positions: portfolio.positions.map((position) => {
+				if (position.instrument.instrument?.instrumentType !== "bond") {
+					return position;
+				}
 
-	const enrichedPortfolios = items.map((portfolio) => ({
-		...portfolio,
-		positions: portfolio.positions.map((position) => {
-			if (position.instrument.instrument?.instrumentType !== "bond") {
-				return position;
-			}
+				const bondData =
+					bondsMap[position.instrument.instrument?.isin || ""] ||
+					bondsMap[position.instrument.instrument?.name || ""];
 
-			const bondData =
-				bondsMap[position.instrument.instrument?.isin || ""] ||
-				bondsMap[position.instrument.instrument?.name || ""];
+				if (!bondData) return position;
 
-			if (!bondData) return position;
+				return {
+					...position,
+					bondRating: bondData.creditRating,
+					bondYtm: bondData.ytm,
+					bondMaturity: bondData.maturityDate,
+					bondData,
+				};
+			}),
+		}));
 
-			return {
-				...position,
-				bondRating: bondData.creditRating,
-				bondYtm: bondData.ytm,
-				bondMaturity: bondData.maturityDate,
-				bondData,
-			};
-		}),
-	}));
+		target.set((state) => ({
+			...state,
+			data: enrichedPortfolios,
+			isEnriched: true,
+		}));
+	}, "portfoliosModel.enrichWithBondsData");
 
-	portfoliosAtom.set(enrichedPortfolios);
-	portfoliosIsEnrichedAtom.set(true);
-}, "enrichWithBondsData");
+	const fetch = action(async () => {
+		target.set((state) => ({
+			...state,
+			isLoading: true,
+			error: null,
+			isEnriched: false,
+		}));
 
-export const fetchPortfolios = action(async () => {
-	portfoliosIsLoadingAtom.set(true);
-	portfoliosErrorAtom.set(null);
-	portfoliosIsEnrichedAtom.set(false);
+		try {
+			const response = await wrap(portfolios());
+			target.set((state) => ({ ...state, data: response }));
 
-	try {
-		const response = await wrap(portfolios());
-		portfoliosAtom.set(response);
+			await wrap(fetchBonds());
+			enrichWithBondsData();
+		} catch (error) {
+			target.set((state) => ({
+				...state,
+				error:
+					error instanceof Error ? error.message : "Failed to fetch portfolios",
+			}));
+		} finally {
+			target.set((state) => ({ ...state, isLoading: false }));
+		}
+	}, "portfoliosModel.fetch");
 
-		await wrap(fetchBonds());
-		enrichWithBondsData();
-	} catch (error) {
-		portfoliosErrorAtom.set(
-			error instanceof Error ? error.message : "Failed to fetch portfolios",
-		);
-	} finally {
-		portfoliosIsLoadingAtom.set(false);
-	}
-}, "fetchPortfolios");
+	return { enrichWithBondsData, fetch };
+});
+
+export const portfoliosAtom = computed(
+	() => portfoliosModel().data,
+	"portfoliosAtom",
+);
+export const portfoliosIsLoadingAtom = computed(
+	() => portfoliosModel().isLoading,
+	"portfoliosIsLoadingAtom",
+);
+export const portfoliosErrorAtom = computed(
+	() => portfoliosModel().error,
+	"portfoliosErrorAtom",
+);
+export const portfoliosIsEnrichedAtom = computed(
+	() => portfoliosModel().isEnriched,
+	"portfoliosIsEnrichedAtom",
+);
+
+export const fetchPortfolios = portfoliosModel.fetch;
+export const enrichWithBondsData = portfoliosModel.enrichWithBondsData;
 
 export const allPositionsAtom = computed(() => {
-	const data = portfoliosAtom();
+	const data = portfoliosModel().data;
 	if (!data) return [];
 
 	return data.flatMap((p) => p.positions);
