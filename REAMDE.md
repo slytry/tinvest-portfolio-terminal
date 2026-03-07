@@ -7,3 +7,5 @@ https://t-j.ru/rentier/
 
 Индикаторы
 - https://www.irn.ru/gd/s-2000-goda-v-dollarah/#begin
+- вот тут можно точный процент доходности посчитать, тинькоф обманывает: https://invest-planner.ru/bonds/info/isin/RU000A101Q26.ME?utm_source=chatgpt.com
+- вот тут можно точный процент доходности посчитать, тинькоф обманывает: https://invest-planner.ru/bonds/info/isin/RU000A101Q26.ME?utm_source=chatgpt.com

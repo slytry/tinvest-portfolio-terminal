@@ -12,13 +12,16 @@ import {
 	Text,
 	Title,
 	Tooltip,
+	Checkbox,
+	Popover,
+	Button,
+	Stack,
 } from "@mantine/core";
 import type { MoneyValue, Quotation } from "@tinkoff/invest-js-grpc-web";
 import { useState } from "react";
 import { useBondsStore } from "~/api/bonds/store";
 import { getRatingColor } from "~/api/bonds/types";
 import { usePortfoliosStore } from "~/api/portfolios";
-
 
 const formatPrice = (value?: Quotation | MoneyValue): string => {
 	if (!value) return "–";
@@ -35,6 +38,69 @@ const formatNumber = (value: number, digits: number = 1): string => {
 		maximumFractionDigits: digits,
 		minimumFractionDigits: digits,
 	}).format(value);
+};
+
+// Функция для форматирования разницы в датах
+const formatDateDifference = (dateStr: string): { text: string; color: string; type: string } => {
+	if (!dateStr || dateStr === '-' || dateStr === 'n/a') {
+		return { text: '—', color: 'gray', type: 'unknown' };
+	}
+
+	try {
+		const [day, month, year] = dateStr.split('.');
+		const targetDate = new Date(`${year}-${month}-${day}`).getTime();
+		const now = new Date().getTime();
+		const diffMs = targetDate - now;
+		const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+		const diffMonths = Math.floor(diffDays / 30);
+		const diffYears = Math.floor(diffDays / 365);
+
+		if (diffDays < 0) {
+			return {
+				text: `Просрочено ${Math.abs(diffDays)} дн.`,
+				color: 'red',
+				type: 'overdue'
+			};
+		}
+
+		if (diffDays === 0) {
+			return { text: 'Сегодня', color: 'yellow', type: 'today' };
+		}
+
+		if (diffDays < 30) {
+			return { text: `${diffDays} дн.`, color: 'orange', type: 'soon' };
+		}
+
+		if (diffMonths < 12) {
+			return { text: `${diffMonths} мес.`, color: 'yellow', type: 'months' };
+		}
+
+		return { text: `${diffYears} г. ${diffMonths % 12} мес.`, color: 'green', type: 'years' };
+	} catch {
+		return { text: dateStr, color: 'gray', type: 'unknown' };
+	}
+};
+
+// Функция для определения типа события
+const getEventType = (eventAtDate: string, maturityDate: string): string => {
+	if (!eventAtDate || eventAtDate === '-' || eventAtDate === 'n/a') {
+		return 'погашение';
+	}
+
+	// Если дата события совпадает с датой погашения или событие называется "погашение"
+	if (eventAtDate === maturityDate || eventAtDate.toLowerCase().includes('погашение')) {
+		return 'погашение';
+	}
+
+	if (eventAtDate.toLowerCase().includes('put') || eventAtDate.toLowerCase().includes('продать')) {
+		return 'оферта (put)';
+	}
+
+	if (eventAtDate.toLowerCase().includes('call') || eventAtDate.toLowerCase().includes('выкуп')) {
+		return 'оферта (call)';
+	}
+
+	return 'оферта';
 };
 
 const moneyToNumber = (value?: MoneyValue | Quotation) => {
@@ -97,14 +163,43 @@ const typeColors: Record<string, string> = {
 	currency: "teal",
 };
 
+// Типы для настроек колонок
+interface ColumnConfig {
+	key: string;
+	label: string;
+	enabled: boolean;
+}
+
 export const PositionsTable = () => {
 	const portfolios = usePortfoliosStore((state) => state.portfolios);
 	const isEnriched = usePortfoliosStore((state) => state.isEnriched);
 	const bondsLoading = useBondsStore((state) => state.isLoading);
+	const bondsMap = useBondsStore((state) => state.bondsMap);
 
 	const [showBondRatings, setShowBondRatings] = useState(true);
+	const [columnsPopoverOpened, setColumnsPopoverOpened] = useState(false);
+
+	// Настройки колонок для облигаций
+	const [bondColumns, setBondColumns] = useState<ColumnConfig[]>([
+		{ key: 'maturity', label: 'Срок', enabled: true },
+		{ key: 'rating', label: 'Рейтинг', enabled: true },
+		{ key: 'ytm', label: 'YTM', enabled: true },
+		{ key: 'duration', label: 'Дюрация', enabled: true },
+		{ key: 'coupon', label: 'Купон', enabled: true },
+		{ key: 'price', label: 'Цена %', enabled: false },
+		{ key: 'volume', label: 'Объем', enabled: false },
+	]);
 
 	const sortRules = ["share", "bond", "etf", "currency"];
+
+	// Функция для переключения колонки
+	const toggleColumn = (key: string) => {
+		setBondColumns(prev =>
+			prev.map(col =>
+				col.key === key ? { ...col, enabled: !col.enabled } : col
+			)
+		);
+	};
 
 	const portfoliosWithGroupedPositions =
 		portfolios?.map((portfolioData) => {
@@ -122,6 +217,9 @@ export const PositionsTable = () => {
 
 			portfolioData.positions.forEach((positionData) => {
 				const instrument = positionData.instrument.instrument;
+				const bondData = bondsMap?.[instrument?.isin || ''] ||
+							   bondsMap?.[instrument?.name || ''];
+
 				const position = {
 					accountName: positionData.accountName,
 					instrumentName: instrument?.name,
@@ -136,9 +234,15 @@ export const PositionsTable = () => {
 					currentNkd: positionData.position.currentNkd,
 					currency: positionData.position.averagePositionPrice?.currency || "rub",
 					// Данные из обогащения
-					bondRating: positionData.bondRating,
-					bondYtm: positionData.bondYtm,
-					bondMaturity: positionData.bondMaturity,
+					bondRating: bondData?.creditRating,
+					bondYtm: bondData?.ytm,
+					bondMaturity: bondData?.maturityDate,
+					bondFinalMaturity: bondData?.finalMaturityDate,
+					bondEventAtDate: bondData?.eventAtDate,
+					bondDuration: bondData?.duration,
+					bondCoupon: bondData?.couponRate,
+					bondPrice: bondData?.price,
+					bondVolume: bondData?.volume,
 				};
 
 				const type = position.instrumentType as keyof typeof positionsByType;
@@ -205,8 +309,11 @@ export const PositionsTable = () => {
 		percent: portfolioTotal ? (value / portfolioTotal) * 100 : 0,
 	}));
 
+	// Получаем активные колонки
+	const activeBondColumns = bondColumns.filter(col => col.enabled);
+
 	return (
-		<Flex maw={950} direction="column" style={{ margin: "30px auto" }}>
+		<Flex maw={1400} direction="column" style={{ margin: "30px auto" }}>
 			<Flex justify="space-between" align="center">
 				<Select
 					label="Accounts"
@@ -220,15 +327,47 @@ export const PositionsTable = () => {
 					maw={300}
 				/>
 
-				<Badge
-					color="blue"
-					variant="light"
-					size="lg"
-					style={{ cursor: 'pointer' }}
-					onClick={() => setShowBondRatings(!showBondRatings)}
-				>
-					{showBondRatings ? 'Скрыть рейтинги' : 'Показать рейтинги'}
-				</Badge>
+				<Flex gap="sm">
+					<Popover
+						opened={columnsPopoverOpened}
+						onChange={setColumnsPopoverOpened}
+						position="bottom-end"
+						withArrow
+					>
+						<Popover.Target>
+							<Button
+								variant="light"
+								size="sm"
+								onClick={() => setColumnsPopoverOpened((o) => !o)}
+							>
+								⚙️ Колонки
+							</Button>
+						</Popover.Target>
+						<Popover.Dropdown>
+							<Stack gap="xs">
+								<Text size="sm" fw={500}>Колонки для облигаций</Text>
+								{bondColumns.map(col => (
+									<Checkbox
+										key={col.key}
+										label={col.label}
+										checked={col.enabled}
+										onChange={() => toggleColumn(col.key)}
+									/>
+								))}
+							</Stack>
+						</Popover.Dropdown>
+					</Popover>
+
+					<Badge
+						color="blue"
+						variant="light"
+						size="lg"
+						style={{ cursor: 'pointer' }}
+						onClick={() => setShowBondRatings(!showBondRatings)}
+					>
+						{showBondRatings ? 'Скрыть доп. данные' : 'Показать доп. данные'}
+					</Badge>
+				</Flex>
 			</Flex>
 
 			<Title order={3}>Портфель: {portfolio.accountName}</Title>
@@ -297,7 +436,7 @@ export const PositionsTable = () => {
 							)}
 						</Flex>
 
-						<Paper shadow="xs" radius={12} withBorder>
+						<Paper shadow="xs" radius={12} withBorder style={{ overflowX: 'auto' }}>
 							<Table highlightOnHover verticalSpacing="md">
 								<Table.Thead>
 									<Table.Tr>
@@ -305,101 +444,196 @@ export const PositionsTable = () => {
 										<Table.Th ta="right">Price</Table.Th>
 										<Table.Th ta="right">Value</Table.Th>
 										<Table.Th ta="right">Yield</Table.Th>
-										{type === 'bond' && showBondRatings && (
-											<>
-												<Table.Th ta="right">Rating</Table.Th>
-												<Table.Th ta="right">YTM</Table.Th>
-											</>
-										)}
+
+										{/* Динамические колонки для облигаций */}
+										{type === 'bond' && activeBondColumns.map(col => (
+											<Table.Th key={col.key} ta="right">{col.label}</Table.Th>
+										))}
+
 										<Table.Th ta="right">%</Table.Th>
 									</Table.Tr>
 								</Table.Thead>
 
 								<Table.Tbody>
-									{positions.map((position) => (
-										<Table.Tr key={position.ticker}>
-											<Table.Td>
-												<Flex gap="sm">
-													<Avatar
-														w={36}
-														h={36}
-														radius="xl"
-														src={`//invest-brands.cdn-tinkoff.ru/${position.img}x160.png`}
-													/>
+									{positions.map((position) => {
+										const diff = formatDateDifference(position.bondMaturity);
+										const eventType = getEventType(
+											position.bondEventAtDate,
+											position.bondFinalMaturity
+										);
+
+										return (
+											<Table.Tr key={position.ticker}>
+												<Table.Td>
+													<Flex gap="sm">
+														<Avatar
+															w={36}
+															h={36}
+															radius="xl"
+															src={`//invest-brands.cdn-tinkoff.ru/${position.img}x160.png`}
+														/>
+														<Flex direction="column">
+															<Text size="sm">{position.instrumentName}</Text>
+															<Text size="xs" c="gray">
+																{position.ticker}
+															</Text>
+														</Flex>
+													</Flex>
+												</Table.Td>
+
+												<Table.Td ta="right">
+													<Tooltip label="Средняя → Текущая">
+														<Text size="sm">
+															{formatPrice(position.averagePrice)} →{" "}
+															{formatPrice(position.currentPrice)}
+														</Text>
+													</Tooltip>
+												</Table.Td>
+
+												<Table.Td ta="right">
 													<Flex direction="column">
-														<Text size="sm">{position.instrumentName}</Text>
+														<Text size="sm">{formatPrice(position.value)}</Text>
 														<Text size="xs" c="gray">
-															{position.ticker}
+															{position.quantity.units} шт
 														</Text>
 													</Flex>
-												</Flex>
-											</Table.Td>
+												</Table.Td>
 
-											<Table.Td ta="right">
-												<Tooltip label="Средняя → Текущая">
-													<Text size="sm">
-														{formatPrice(position.averagePrice)} →{" "}
-														{formatPrice(position.currentPrice)}
-													</Text>
-												</Tooltip>
-											</Table.Td>
+												<Table.Td ta="right">
+													<Badge
+														color={getYieldColor(position.expectedYield)}
+														variant="light"
+													>
+														{formatPrice(position.expectedYield)}
+													</Badge>
+												</Table.Td>
 
-											<Table.Td ta="right">
-												<Flex direction="column">
-													<Text size="sm">{formatPrice(position.value)}</Text>
-													<Text size="xs" c="gray">
-														{position.quantity.units} шт
-													</Text>
-												</Flex>
-											</Table.Td>
+												{/* Динамические колонки для облигаций */}
+												{type === 'bond' && activeBondColumns.map(col => {
+													switch(col.key) {
+														case 'maturity':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondMaturity ? (
+																		<Tooltip
+																			label={`${eventType} ${position.bondMaturity}`}
+																		>
+																			<Badge color={diff.color} variant="light">
+																				{diff.text}
+																			</Badge>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
 
-											<Table.Td ta="right">
-												<Badge
-													color={getYieldColor(position.expectedYield)}
-													variant="light"
-												>
-													{formatPrice(position.expectedYield)}
-												</Badge>
-											</Table.Td>
+														case 'rating':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondRating ? (
+																		<Tooltip label={`Кредитный рейтинг: ${position.bondRating}`}>
+																			<Badge
+																				color={getRatingColor(position.bondRating)}
+																				variant="light"
+																				size="lg"
+																				style={{ minWidth: 60 }}
+																			>
+																				{position.bondRating}
+																			</Badge>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
 
-											{type === 'bond' && showBondRatings && (
-												<>
-													<Table.Td ta="right">
-														{position.bondRating ? (
-															<Tooltip label={`Кредитный рейтинг: ${position.bondRating}`}>
-																<Badge
-																	color={getRatingColor(position.bondRating)}
-																	variant="light"
-																	size="lg"
-																	style={{ minWidth: 60 }}
-																>
-																	{position.bondRating}
-																</Badge>
-															</Tooltip>
-														) : (
-															<Text size="xs" c="dimmed">—</Text>
-														)}
-													</Table.Td>
+														case 'ytm':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondYtm ? (
+																		<Tooltip label="Эффективная доходность">
+																			<Badge color="blue" variant="light">
+																				{formatNumber(position.bondYtm, 1)}%
+																			</Badge>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
 
-													<Table.Td ta="right">
-														{position.bondYtm ? (
-															<Tooltip label="Эффективная доходность">
-																<Badge color="blue" variant="light">
-																	{formatNumber(position.bondYtm, 1)}%
-																</Badge>
-															</Tooltip>
-														) : (
-															<Text size="xs" c="dimmed">—</Text>
-														)}
-													</Table.Td>
-												</>
-											)}
+														case 'duration':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondDuration ? (
+																		<Tooltip label="Дюрация (лет)">
+																			<Text size="sm">
+																				{formatNumber(position.bondDuration, 2)}
+																			</Text>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
 
-											<Table.Td ta="right">
-												<Text fw={500}>{position.percent.toFixed(2)}%</Text>
-											</Table.Td>
-										</Table.Tr>
-									))}
+														case 'coupon':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondCoupon ? (
+																		<Tooltip label="Текущий купон">
+																			<Text size="sm">
+																				{formatNumber(position.bondCoupon, 2)}%
+																			</Text>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
+
+														case 'price':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondPrice ? (
+																		<Tooltip label="Цена % от номинала">
+																			<Text size="sm">
+																				{formatNumber(position.bondPrice, 2)}%
+																			</Text>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
+
+														case 'volume':
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondVolume ? (
+																		<Tooltip label="Объем выпуска (млрд)">
+																			<Text size="sm">
+																				{formatNumber(position.bondVolume, 2)} млрд
+																			</Text>
+																		</Tooltip>
+																	) : (
+																		<Text size="xs" c="dimmed">—</Text>
+																	)}
+																</Table.Td>
+															);
+
+														default:
+															return null;
+													}
+												})}
+
+												<Table.Td ta="right">
+													<Text fw={500}>{position.percent.toFixed(2)}%</Text>
+												</Table.Td>
+											</Table.Tr>
+										);
+									})}
 								</Table.Tbody>
 							</Table>
 						</Paper>
