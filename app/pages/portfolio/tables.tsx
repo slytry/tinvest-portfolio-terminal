@@ -17,11 +17,12 @@ import {
 	Button,
 	Stack,
 } from "@mantine/core";
+import { reatomComponent } from "@reatom/react";
 import type { MoneyValue, Quotation } from "@tinkoff/invest-js-grpc-web";
 import { useState } from "react";
-import { useBondsStore } from "~/api/bonds/store";
+import { bondsIsLoadingAtom, bondsMapAtom } from "~/api/bonds/store";
 import { getRatingColor } from "~/api/bonds/types";
-import { usePortfoliosStore } from "~/api/portfolios";
+import { portfoliosAtom, portfoliosIsEnrichedAtom } from "~/api/portfolios";
 
 const formatPrice = (value?: Quotation | MoneyValue): string => {
 	if (!value) return "–";
@@ -170,11 +171,11 @@ interface ColumnConfig {
 	type?: string; // для фильтрации по типу инструмента
 }
 
-export const PositionsTable = () => {
-	const portfolios = usePortfoliosStore((state) => state.portfolios);
-	const isEnriched = usePortfoliosStore((state) => state.isEnriched);
-	const bondsLoading = useBondsStore((state) => state.isLoading);
-	const bondsMap = useBondsStore((state) => state.bondsMap);
+export const PositionsTable = reatomComponent(() => {
+	const portfolios = portfoliosAtom();
+	const isEnriched = portfoliosIsEnrichedAtom();
+	const bondsLoading = bondsIsLoadingAtom();
+	const bondsMap = bondsMapAtom();
 
 	const [columnsPopoverOpened, setColumnsPopoverOpened] = useState(false);
 
@@ -696,4 +697,4 @@ export const PositionsTable = () => {
 			})}
 		</Flex>
 	);
-};
+}, "PositionsTable");
