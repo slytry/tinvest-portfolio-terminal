@@ -5,32 +5,21 @@ const fs = require("fs");
 async function downloadBondsExcel() {
 	console.log("🚀 Запускаем браузер...");
 
-	// Оптимизированные настройки браузера
 	const browser = await puppeteer.launch({
-		headless: "new", // используем новый безголовый режим (быстрее)
+		headless: 'new', // Временно ставим false для отладки
 		defaultViewport: { width: 1920, height: 1080 },
 		args: [
 			'--no-sandbox',
 			'--disable-setuid-sandbox',
 			'--disable-dev-shm-usage',
-			'--disable-accelerated-2d-canvas',
-			'--disable-gpu',
 			'--window-size=1920,1080'
 		],
 	});
 
 	const page = await browser.newPage();
 
-	// Блокируем ненужные ресурсы для ускорения
-	await page.setRequestInterception(true);
-	page.on('request', (request) => {
-		const resourceType = request.resourceType();
-		if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-			request.abort();
-		} else {
-			request.continue();
-		}
-	});
+	// НЕ БЛОКИРУЕМ ресурсы - они нужны для работы таблицы!
+	// Убираем блокировку или блокируем только совсем ненужное
 
 	// Настраиваем скачивание
 	const downloadPath = path.resolve("./downloads");
@@ -48,23 +37,29 @@ async function downloadBondsExcel() {
 	try {
 		console.log("📱 Открываем сайт...");
 		await page.goto("https://www.dohod.ru/analytic/bonds", {
-			waitUntil: "domcontentloaded", // быстрее чем networkidle2
-			timeout: 15000,
+			waitUntil: "networkidle2", // Возвращаем networkidle2 для полной загрузки
+			timeout: 30000,
 		});
 
 		console.log("⏳ Ждем загрузки таблицы...");
-		// Используем более быстрый селектор
-		await page.waitForSelector("#DataTables_Table_0", { timeout: 5000 });
+		await page.waitForSelector("#DataTables_Table_0", { timeout: 10000 });
 
-		// Минимальная задержка
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		// Ждем появления данных в таблице
+		await page.waitForFunction(() => {
+			const table = document.querySelector("#DataTables_Table_0");
+			return table && table.querySelectorAll('tr').length > 5;
+		}, { timeout: 10000 });
+
+		// Даем время на полную загрузку данных
+		await new Promise((resolve) => setTimeout(resolve, 2000));
 
 		console.log("🖱 Нажимаем на кнопку...");
 
-		// Оптимизированный клик
+		// Кликаем по кнопке
 		const buttonClicked = await page.evaluate(() => {
 			const button = document.querySelector("button.buttons-excel");
 			if (button) {
+				button.scrollIntoView();
 				button.click();
 				return true;
 			}
@@ -74,8 +69,8 @@ async function downloadBondsExcel() {
 		if (buttonClicked) {
 			console.log("✅ Кнопка нажата!");
 
-			// Уменьшаем время ожидания скачивания
-			await new Promise((resolve) => setTimeout(resolve, 2000));
+			// Ждем скачивания
+			await new Promise((resolve) => setTimeout(resolve, 5000));
 
 			// Проверяем файлы
 			const files = fs.readdirSync(downloadPath);
@@ -92,13 +87,21 @@ async function downloadBondsExcel() {
 				const sourcePath = path.join(downloadPath, latestFile);
 				const destPath = path.join(__dirname, "bonds_analysis.xlsx");
 
+				// Проверяем размер файла (не пустой ли)
+				const stats = fs.statSync(sourcePath);
+				if (stats.size < 1000) {
+					console.warn("⚠️ Файл слишком маленький, возможно пустой");
+				}
+
 				fs.copyFileSync(sourcePath, destPath);
-				console.log(`✅ Файл сохранен: ${destPath}`);
+				console.log(`✅ Файл сохранен: ${destPath} (${stats.size} bytes)`);
 
 				// Очищаем временные файлы
 				excelFiles.forEach(f => {
 					fs.unlinkSync(path.join(downloadPath, f));
 				});
+			} else {
+				console.log("❌ Файл не найден в папке загрузок");
 			}
 		} else {
 			console.log("❌ Кнопка не найдена");

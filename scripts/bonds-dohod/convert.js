@@ -6,12 +6,11 @@ const { ru } = require('date-fns/locale');
 
 const CONFIG = {
     inputFile: 'scripts/bonds-dohod/bonds_analysis.xlsx',
-    outputDir: 'scripts/bonds-dohod/json-data',
+    outputDir: 'public/data',
     dateFormat: 'yyyy-MM-dd_HH-mm',
     prettyJson: true
 };
 
-// ПОЛНЫЙ маппинг всех колонок из таблицы
 const COLUMN_MAPPING = {
     'ISIN': 'isin',
     'Название': 'name',
@@ -65,8 +64,10 @@ async function convertExcelToJson() {
         return;
     }
 
+    // Создаем папку public/data если её нет
     if (!fs.existsSync(CONFIG.outputDir)) {
         fs.mkdirSync(CONFIG.outputDir, { recursive: true });
+        console.log(`📁 Создана папка: ${CONFIG.outputDir}`);
     }
 
     console.log('📖 Читаем Excel файл...');
@@ -88,11 +89,6 @@ async function convertExcelToJson() {
             let value = row[index];
             const englishKey = COLUMN_MAPPING[header] || header;
 
-            // Оставляем комментарий о пропущенных маппингах
-            if (!COLUMN_MAPPING[header] && header) {
-                console.warn(`⚠️ Нет маппинга для заголовка: "${header}"`);
-            }
-
             if (value !== undefined && value !== null && value !== 'n/a' && value !== '') {
                 // Обработка строк с запятыми (числа)
                 if (typeof value === 'string' && value.includes(',')) {
@@ -103,7 +99,7 @@ async function convertExcelToJson() {
                 if (typeof value === 'string' && !isNaN(value) && value.trim() !== '') {
                     bond[englishKey] = parseFloat(value);
                 }
-                // Обработка строк с процентами (уже числа)
+                // Обработка строк с процентами
                 else if (typeof value === 'string' && value.includes('%')) {
                     bond[englishKey] = parseFloat(value.replace('%', ''));
                 }
@@ -111,15 +107,14 @@ async function convertExcelToJson() {
                 else if (typeof value === 'string' && value.match(/^\d{2}\.\d{2}\.\d{4}$/)) {
                     bond[englishKey] = value;
                 }
-                // Обработка чисел, которые уже числа
+                // Обработка чисел
                 else if (typeof value === 'number') {
                     bond[englishKey] = value;
                 }
+                // Все остальное - строки (обрезаем пробелы)
                 else if (typeof value === 'string') {
-                    bond[englishKey] = value.trim(); // ← здесь обрезаем пробелы
-                }
-                // Все остальное - строки
-                else {
+                    bond[englishKey] = value.trim();
+                } else {
                     bond[englishKey] = value;
                 }
             } else {
@@ -132,15 +127,16 @@ async function convertExcelToJson() {
     // Очищаем данные от выбросов для статистики
     const validYtm = bonds
         .map(b => b.ytm)
-        .filter(v => v && !isNaN(v) && v > -50 && v < 100); // убираем явные выбросы
+        .filter(v => v && !isNaN(v) && v > -50 && v < 100);
 
     const timestamp = new Date();
     const dateStr = format(timestamp, CONFIG.dateFormat);
+    const readableDate = format(timestamp, 'dd MMMM yyyy HH:mm', { locale: ru });
 
     const webData = {
         meta: {
             generated: timestamp.toISOString(),
-            generatedReadable: format(timestamp, 'dd MMMM yyyy HH:mm', { locale: ru }),
+            generatedReadable: readableDate,
             source: 'https://www.dohod.ru/analytic/bonds',
             totalBonds: bonds.length,
             version: '1.0.0'
@@ -158,29 +154,45 @@ async function convertExcelToJson() {
         bonds: bonds
     };
 
-    const filename = `bonds_${dateStr}.json`;
-    const outputPath = path.join(CONFIG.outputDir, filename);
+    // 1. Сохраняем файл с датой
+    const datedFilename = `bonds_${dateStr}.json`;
+    const datedPath = path.join(CONFIG.outputDir, datedFilename);
+
+    // 2. Сохраняем как bonds_latest.json (последняя версия)
+    const latestPath = path.join(CONFIG.outputDir, 'bonds_latest.json');
 
     const jsonString = CONFIG.prettyJson
         ? JSON.stringify(webData, null, 2)
         : JSON.stringify(webData);
 
-    fs.writeFileSync(outputPath, jsonString);
+    // Сохраняем оба файла
+    fs.writeFileSync(datedPath, jsonString);
+    fs.writeFileSync(latestPath, jsonString);
 
     console.log('\n✅ Готово!');
     console.log(`📊 Всего облигаций: ${bonds.length}`);
-    console.log(`📁 Файл сохранен: ${outputPath}`);
+    console.log(`📁 Файлы сохранены:`);
+    console.log(`   📄 ${datedPath}`);
+    console.log(`   📄 ${latestPath} (последняя версия)`);
+
+    // Показываем статистику
     console.log('\n📈 Статистика:');
     console.log(`   Средняя YTM: ${webData.stats.averageYtm.toFixed(2)}%`);
     console.log(`   Макс YTM: ${webData.stats.maxYtm.toFixed(2)}%`);
     console.log(`   Мин YTM: ${webData.stats.minYtm.toFixed(2)}%`);
     console.log(`   Общий объем: ${webData.stats.totalVolume.toFixed(2)} млрд`);
 
-    // Показываем распределение по типам
     console.log('\n📊 Распределение по типам эмитентов:');
     Object.entries(webData.stats.byIssuerType).forEach(([key, value]) => {
         console.log(`   ${key}: ${value}`);
     });
+
+    // Показываем структуру папок
+    console.log('\n📁 Структура public/data:');
+    console.log('   public/');
+    console.log('   └── data/');
+    console.log(`       ├── ${datedFilename}`);
+    console.log('       └── bonds_latest.json');
 }
 
 // Вспомогательные функции

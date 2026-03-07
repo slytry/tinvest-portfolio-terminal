@@ -6,6 +6,8 @@ import type {
 import { create } from "zustand";
 import { api } from "./client";
 import { instrumentByUID } from "./instrumentByUID";
+import { useBondsStore } from "./bonds/store";
+
 
 export type AccountPortfolio = {
 	portfolio: PortfolioResponse;
@@ -17,6 +19,11 @@ export type ExtPosition = {
 	accountName: string;
 	position: PortfolioPosition;
 	instrument: InstrumentResponse;
+	// Добавляем поля для облигаций
+	bondRating?: string;
+	bondYtm?: number;
+	bondMaturity?: string;
+	bondData?: any;
 };
 
 export const portfolios = async (): Promise<AccountPortfolio[]> => {
@@ -47,24 +54,37 @@ type PortfolioState = {
 	portfolios: AccountPortfolio[] | null;
 	isLoading: boolean;
 	error: string | null;
+	// Добавляем флаг, что данные обогащены
+	isEnriched: boolean;
 };
 
 type PortfolioActions = {
 	fetchPortfolios: () => Promise<void>;
+	// Новый метод для обогащения данных облигациями
+	enrichWithBondsData: () => Promise<void>;
 };
 
 type PortfolioStore = PortfolioState & PortfolioActions;
 
-export const usePortfoliosStore = create<PortfolioStore>((set) => ({
+export const usePortfoliosStore = create<PortfolioStore>((set, get) => ({
 	portfolios: null,
 	isLoading: true,
 	error: null,
+	isEnriched: false,
 
 	fetchPortfolios: async () => {
-		set({ isLoading: true, error: null });
+		set({ isLoading: true, error: null, isEnriched: false });
 		try {
 			const response = await portfolios();
 			set({ portfolios: response, isLoading: false });
+
+			// Автоматически загружаем данные облигаций
+			const bondsStore = useBondsStore.getState();
+			await bondsStore.fetchBonds();
+
+			// Обогащаем данные
+			get().enrichWithBondsData();
+
 		} catch (error) {
 			set({
 				error:
@@ -73,4 +93,54 @@ export const usePortfoliosStore = create<PortfolioStore>((set) => ({
 			});
 		}
 	},
+
+	enrichWithBondsData: async () => {
+		const { portfolios } = get();
+		const bondsStore = useBondsStore.getState();
+
+		if (!portfolios || !bondsStore.bondsMap) return;
+
+		// Обогащаем каждую позицию
+		const enrichedPortfolios = portfolios.map(portfolio => ({
+			...portfolio,
+			positions: portfolio.positions.map(position => {
+				if (position.instrument.instrument?.instrumentType !== 'bond') {
+					return position;
+				}
+
+				const bondData = bondsStore.getBondByIsin(
+					position.instrument.instrument?.isin || ''
+				) || bondsStore.getBondByName(
+					position.instrument.instrument?.name || ''
+				);
+
+				if (bondData) {
+					return {
+						...position,
+						bondRating: bondData.creditRating,
+						bondYtm: bondData.ytm,
+						bondMaturity: bondData.maturityDate,
+						bondData,
+					};
+				}
+
+				return position;
+			}),
+		}));
+
+		set({ portfolios: enrichedPortfolios, isEnriched: true });
+	},
 }));
+
+// Хук для получения обогащенных позиций
+export const useEnrichedPositions = () => {
+	const portfolios = usePortfoliosStore(state => state.portfolios);
+	const isEnriched = usePortfoliosStore(state => state.isEnriched);
+
+	if (!portfolios) return [];
+
+	// Собираем все позиции со всех портфелей
+	const allPositions = portfolios.flatMap(p => p.positions);
+
+	return { positions: allPositions, isEnriched };
+};

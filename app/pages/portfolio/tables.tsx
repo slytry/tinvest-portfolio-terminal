@@ -11,21 +11,30 @@ import {
 	Table,
 	Text,
 	Title,
+	Tooltip,
 } from "@mantine/core";
 import type { MoneyValue, Quotation } from "@tinkoff/invest-js-grpc-web";
 import { useState } from "react";
+import { useBondsStore } from "~/api/bonds/store";
+import { getRatingColor } from "~/api/bonds/types";
 import { usePortfoliosStore } from "~/api/portfolios";
+
 
 const formatPrice = (value?: Quotation | MoneyValue): string => {
 	if (!value) return "–";
-
 	const total = value.units + value.nano / 1_000_000_000;
-
 	return new Intl.NumberFormat("ru-RU", {
 		style: "currency",
 		currency: "RUB",
 		maximumFractionDigits: 1,
 	}).format(total);
+};
+
+const formatNumber = (value: number, digits: number = 1): string => {
+	return new Intl.NumberFormat("ru-RU", {
+		maximumFractionDigits: digits,
+		minimumFractionDigits: digits,
+	}).format(value);
 };
 
 const moneyToNumber = (value?: MoneyValue | Quotation) => {
@@ -89,10 +98,11 @@ const typeColors: Record<string, string> = {
 };
 
 export const PositionsTable = () => {
-	const portfolios = usePortfoliosStore((state) => {
-		return state.portfolios;
-	});
-	console.log("🚀 ~ PositionsTable ~ portfolios:", portfolios);
+	const portfolios = usePortfoliosStore((state) => state.portfolios);
+	const isEnriched = usePortfoliosStore((state) => state.isEnriched);
+	const bondsLoading = useBondsStore((state) => state.isLoading);
+
+	const [showBondRatings, setShowBondRatings] = useState(true);
 
 	const sortRules = ["share", "bond", "etf", "currency"];
 
@@ -111,25 +121,27 @@ export const PositionsTable = () => {
 			}
 
 			portfolioData.positions.forEach((positionData) => {
+				const instrument = positionData.instrument.instrument;
 				const position = {
 					accountName: positionData.accountName,
-					instrumentName: positionData.instrument.instrument?.name,
-					instrumentType: positionData.instrument.instrument?.instrumentType,
-					img: removePngExtension(
-						positionData.instrument.instrument?.brand?.logoName,
-					),
-					ticker: positionData.instrument.instrument?.ticker,
+					instrumentName: instrument?.name,
+					instrumentType: instrument?.instrumentType,
+					isin: instrument?.isin,
+					img: removePngExtension(instrument?.brand?.logoName),
+					ticker: instrument?.ticker,
 					quantity: positionData.position.quantity,
 					averagePrice: positionData.position.averagePositionPrice,
 					currentPrice: positionData.position.currentPrice,
 					expectedYield: positionData.position.expectedYield,
 					currentNkd: positionData.position.currentNkd,
-					currency:
-						positionData.position.averagePositionPrice?.currency || "rub",
+					currency: positionData.position.averagePositionPrice?.currency || "rub",
+					// Данные из обогащения
+					bondRating: positionData.bondRating,
+					bondYtm: positionData.bondYtm,
+					bondMaturity: positionData.bondMaturity,
 				};
 
 				const type = position.instrumentType as keyof typeof positionsByType;
-
 				if (positionsByType[type]) positionsByType[type].push(position);
 			});
 
@@ -174,8 +186,7 @@ export const PositionsTable = () => {
 	);
 
 	positionsWithValue.forEach((p) => {
-		p.percent =
-			portfolioTotal === 0 ? 0 : (p.valueNumber / portfolioTotal) * 100;
+		p.percent = portfolioTotal === 0 ? 0 : (p.valueNumber / portfolioTotal) * 100;
 	});
 
 	const allocation: Record<string, number> = {
@@ -195,18 +206,30 @@ export const PositionsTable = () => {
 	}));
 
 	return (
-		<Flex maw={900} direction="column" style={{ margin: "30px auto" }}>
-			<Select
-				label="Accounts"
-				data={portfoliosWithGroupedPositions.map((p) => ({
-					label: p.accountName,
-					value: p.accountName,
-				}))}
-				value={selectedPortfolio}
-				onChange={(v) => setSelectedPortfolio(v!)}
-				mb="lg"
-				maw={300}
-			/>
+		<Flex maw={950} direction="column" style={{ margin: "30px auto" }}>
+			<Flex justify="space-between" align="center">
+				<Select
+					label="Accounts"
+					data={portfoliosWithGroupedPositions.map((p) => ({
+						label: p.accountName,
+						value: p.accountName,
+					}))}
+					value={selectedPortfolio}
+					onChange={(v) => setSelectedPortfolio(v!)}
+					mb="lg"
+					maw={300}
+				/>
+
+				<Badge
+					color="blue"
+					variant="light"
+					size="lg"
+					style={{ cursor: 'pointer' }}
+					onClick={() => setShowBondRatings(!showBondRatings)}
+				>
+					{showBondRatings ? 'Скрыть рейтинги' : 'Показать рейтинги'}
+				</Badge>
+			</Flex>
 
 			<Title order={3}>Портфель: {portfolio.accountName}</Title>
 
@@ -256,15 +279,23 @@ export const PositionsTable = () => {
 			{sortRules.map((type) => {
 				const positions = positionsWithValue
 					.filter((p) => p.instrumentType === type)
-					.sort((a, b) => b.percent - a.percent); // sorting by %
+					.sort((a, b) => b.percent - a.percent);
 
 				if (!positions.length) return null;
 
 				return (
 					<div key={type} style={{ marginBottom: "1.5rem" }}>
-						<Title order={4} mb="xs" c="dimmed">
-							{typeToRussian[type as keyof typeof typeToRussian]}
-						</Title>
+						<Flex justify="space-between" align="center" mb="xs">
+							<Title order={4} c="dimmed">
+								{typeToRussian[type as keyof typeof typeToRussian]}
+							</Title>
+							{type === 'bond' && bondsLoading && (
+								<Badge size="sm" variant="dot">Загрузка рейтингов...</Badge>
+							)}
+							{type === 'bond' && !isEnriched && (
+								<Badge size="sm" color="yellow">Ожидание данных...</Badge>
+							)}
+						</Flex>
 
 						<Paper shadow="xs" radius={12} withBorder>
 							<Table highlightOnHover verticalSpacing="md">
@@ -274,6 +305,12 @@ export const PositionsTable = () => {
 										<Table.Th ta="right">Price</Table.Th>
 										<Table.Th ta="right">Value</Table.Th>
 										<Table.Th ta="right">Yield</Table.Th>
+										{type === 'bond' && showBondRatings && (
+											<>
+												<Table.Th ta="right">Rating</Table.Th>
+												<Table.Th ta="right">YTM</Table.Th>
+											</>
+										)}
 										<Table.Th ta="right">%</Table.Th>
 									</Table.Tr>
 								</Table.Thead>
@@ -299,10 +336,12 @@ export const PositionsTable = () => {
 											</Table.Td>
 
 											<Table.Td ta="right">
-												<Text size="sm">
-													{formatPrice(position.averagePrice)} →{" "}
-													{formatPrice(position.currentPrice)}
-												</Text>
+												<Tooltip label="Средняя → Текущая">
+													<Text size="sm">
+														{formatPrice(position.averagePrice)} →{" "}
+														{formatPrice(position.currentPrice)}
+													</Text>
+												</Tooltip>
 											</Table.Td>
 
 											<Table.Td ta="right">
@@ -322,6 +361,39 @@ export const PositionsTable = () => {
 													{formatPrice(position.expectedYield)}
 												</Badge>
 											</Table.Td>
+
+											{type === 'bond' && showBondRatings && (
+												<>
+													<Table.Td ta="right">
+														{position.bondRating ? (
+															<Tooltip label={`Кредитный рейтинг: ${position.bondRating}`}>
+																<Badge
+																	color={getRatingColor(position.bondRating)}
+																	variant="light"
+																	size="lg"
+																	style={{ minWidth: 60 }}
+																>
+																	{position.bondRating}
+																</Badge>
+															</Tooltip>
+														) : (
+															<Text size="xs" c="dimmed">—</Text>
+														)}
+													</Table.Td>
+
+													<Table.Td ta="right">
+														{position.bondYtm ? (
+															<Tooltip label="Эффективная доходность">
+																<Badge color="blue" variant="light">
+																	{formatNumber(position.bondYtm, 1)}%
+																</Badge>
+															</Tooltip>
+														) : (
+															<Text size="xs" c="dimmed">—</Text>
+														)}
+													</Table.Td>
+												</>
+											)}
 
 											<Table.Td ta="right">
 												<Text fw={500}>{position.percent.toFixed(2)}%</Text>
