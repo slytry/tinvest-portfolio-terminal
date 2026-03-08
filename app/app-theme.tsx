@@ -18,7 +18,11 @@ export function AppTheme({
   ...props
 }: MantineProviderProps) {
   return (
-    <MantineProvider theme={theme} {...props}>
+    <MantineProvider
+      defaultColorScheme="auto"
+      theme={theme}
+      {...props}
+    >
       {children}
     </MantineProvider>
   );

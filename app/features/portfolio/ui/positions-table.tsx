@@ -4,27 +4,33 @@ import {
 	Avatar,
 	Badge,
 	Box,
-	CopyButton,
+	Button,
+	Checkbox,
 	Flex,
-	Modal,
+	Group,
 	Paper,
+	Popover,
 	RingProgress,
+	SimpleGrid,
 	Select,
+	Stack,
 	Table,
-	Textarea,
 	Text,
+	ThemeIcon,
 	Title,
 	Tooltip,
-	Checkbox,
-	Popover,
-	Button,
-	Stack,
+	Progress,
+	useComputedColorScheme,
 } from "@mantine/core";
 import { reatomComponent } from "@reatom/react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { bondsIsLoadingAtom, bondsMapAtom } from "~/api/bonds/store";
 import { getRatingColor } from "~/api/bonds/types";
 import { portfoliosAtom, portfoliosIsEnrichedAtom } from "~/api/portfolios";
+import {
+	buildPortfolioCsv,
+	type ExportRow,
+} from "~/features/portfolio/lib/export";
 import {
 	addPrices,
 	formatDateDifference,
@@ -37,6 +43,8 @@ import {
 	typeColors,
 	typeToRussian,
 } from "~/features/portfolio/lib/table-helpers";
+import { PROMPT_TEMPLATES } from "~/features/portfolio/model/prompt-templates";
+import { AnalysisModal } from "./analysis-modal";
 
 // Типы для настроек колонок - ТЕПЕРЬ ДЛЯ ВСЕХ ТИПОВ
 interface ColumnConfig {
@@ -46,116 +54,71 @@ interface ColumnConfig {
 	type?: string; // для фильтрации по типу инструмента
 }
 
-type PromptTemplate = {
-	key: string;
-	label: string;
-	template: string;
+type PortfolioUiSettings = {
+	selectedPortfolioId: string | null;
+	selectedPromptTemplate: string;
+	allColumns: ColumnConfig[];
 };
 
-const PROMPT_TEMPLATES: PromptTemplate[] = [
-	{
-		key: "full-bond-analysis",
-		label: "Полный анализ облигационного портфеля",
-		template: `Выступай как профессиональный портфельный менеджер и аналитик рынка облигаций с опытом управления институциональными портфелями.
+const PORTFOLIO_UI_SETTINGS_KEY = "portfolio_ui_settings_v1";
 
-Я дам тебе список облигаций из моего портфеля. Проведи комплексный анализ.
-
-1. Общий анализ портфеля
-- оцени качество портфеля
-- определи уровень риска (низкий / средний / высокий)
-- оцени диверсификацию
-- выяви концентрации риска (страна, сектор, валюта, эмитент)
-
-2. Кредитный риск
-Для каждой облигации:
-- оцени вероятность дефолта
-- прокомментируй кредитное качество эмитента
-- укажи ключевые риски эмитента
-
-3. Процентный риск
-- оцени чувствительность портфеля к изменению процентных ставок
-- что будет с портфелем если ставки вырастут на:
-  - +1%
-  - +2%
-  - +3%
-
-4. Сценарный анализ
-Опиши как поведет себя портфель в сценариях:
-
-Сценарий 1 — глобальная рецессия
-Сценарий 2 — рост инфляции
-Сценарий 3 — резкое повышение ставок центральными банками
-Сценарий 4 — финансовый кризис
-Сценарий 5 — сильный экономический рост
-
-5. Диверсификация
-Оцени диверсификацию по:
-- странам
-- валютам
-- секторам
-- срокам погашения
-- рейтингу
-
-Укажи:
-- где есть перекос
-- какие риски плохо диверсифицированы
-
-6. Структура портфеля
-Проанализируй:
-- среднюю дюрацию
-- среднюю доходность
-- распределение по срокам
-- долю high yield и investment grade
-
-7. Рекомендации
-Дай конкретные рекомендации:
-- какие риски сократить
-- какие типы облигаций добавить
-- какие страны / сектора могут улучшить диверсификацию
-- какие доли портфеля оптимальны
-
-8. Улучшение портфеля
-Предложи пример более устойчивого портфеля облигаций:
-- с лучшей диверсификацией
-- с контролируемым риском
-- с хорошей доходностью
-
-9. Краткое резюме
-В конце дай:
-- ключевые риски
-- сильные стороны портфеля
-- 3 главные рекомендации
-
-Вот мой портфель:
-
-{{portfolio}}
-
-Дополнительно:
-
-- оцени worst case сценарий
-- оцени Value at Risk портфеля
-- оцени корреляцию рисков
-- предложи хеджирование
-- предложи долю cash или short duration bonds`,
-	},
-	{
-		key: "quick-risk-check",
-		label: "Быстрый риск-чек",
-		template: `Сделай краткий риск-анализ этого портфеля облигаций.
-
-Требования:
-1. Ключевые риски (топ-5)
-2. Качество диверсификации
-3. Слабые места по срокам/валютам/эмитентам
-4. Что улучшить прямо сейчас (3 конкретных шага)
-
-Портфель:
-
-{{portfolio}}`,
-	},
+const DEFAULT_COLUMNS: ColumnConfig[] = [
+	{ key: "instrument", label: "Instrument", enabled: true, type: "all" },
+	{ key: "price", label: "Price", enabled: true, type: "all" },
+	{ key: "value", label: "Value", enabled: true, type: "all" },
+	{ key: "yield", label: "Yield", enabled: true, type: "all" },
+	{ key: "percent", label: "%", enabled: true, type: "all" },
+	{ key: "currencyCode", label: "Валюта", enabled: false, type: "all" },
+	{ key: "accrued", label: "НКД", enabled: false, type: "bond" },
+	{ key: "maturity", label: "Срок", enabled: true, type: "bond" },
+	{ key: "event", label: "Событие", enabled: false, type: "bond" },
+	{ key: "rating", label: "Рейтинг", enabled: true, type: "bond" },
+	{ key: "ytm", label: "YTM", enabled: true, type: "bond" },
+	{ key: "duration", label: "Дюрация", enabled: true, type: "bond" },
+	{ key: "coupon", label: "Купон", enabled: true, type: "bond" },
+	{ key: "bondPrice", label: "Цена %", enabled: false, type: "bond" },
+	{ key: "volume", label: "Объем", enabled: false, type: "bond" },
+	{ key: "dividend", label: "Дивиденды", enabled: false, type: "share" },
+	{ key: "sector", label: "Сектор", enabled: false, type: "share" },
+	{ key: "expense", label: "Комиссия", enabled: false, type: "etf" },
+	{ key: "provider", label: "Провайдер", enabled: false, type: "etf" },
 ];
 
+const readPortfolioUiSettings = (): Partial<PortfolioUiSettings> => {
+	try {
+		const raw = localStorage.getItem(PORTFOLIO_UI_SETTINGS_KEY);
+		if (!raw) return {};
+		return JSON.parse(raw) as Partial<PortfolioUiSettings>;
+	} catch {
+		return {};
+	}
+};
+
+const COLUMN_DESCRIPTIONS: Record<string, string> = {
+	instrument: "Название инструмента и тикер.",
+	price: "Средняя цена входа и текущая рыночная цена позиции.",
+	value: "Текущая стоимость позиции с учетом цены и НКД.",
+	yield: "Текущий финансовый результат позиции.",
+	percent: "Доля позиции в общей стоимости выбранного портфеля.",
+	accrued: "Накопленный купонный доход (НКД) по позиции.",
+	currencyCode: "Валюта инструмента.",
+	maturity: "Срок до ближайшего события/погашения.",
+	event: "Тип ближайшего события по выпуску (оферта/call/put/погашение).",
+	rating: "Кредитный рейтинг облигации.",
+	ytm: "Доходность к погашению (Yield to Maturity).",
+	duration: "Дюрация: чувствительность цены к изменению ставок.",
+	coupon: "Купонная ставка облигации.",
+	bondPrice: "Цена облигации в процентах от номинала.",
+	volume: "Оценочный объем выпуска облигации.",
+	dividend: "Дивидендные параметры акции (если доступны).",
+	sector: "Сектор/отрасль эмитента.",
+	expense: "Комиссия фонда (expense ratio).",
+	provider: "Управляющая компания/провайдер фонда.",
+};
+
 export const PositionsTable = reatomComponent(() => {
+	const colorScheme = useComputedColorScheme("light");
+	const isDark = colorScheme === "dark";
 	const portfolios = portfoliosAtom();
 	const isEnriched = portfoliosIsEnrichedAtom();
 	const bondsLoading = bondsIsLoadingAtom();
@@ -163,60 +126,50 @@ export const PositionsTable = reatomComponent(() => {
 
 	const [columnsPopoverOpened, setColumnsPopoverOpened] = useState(false);
 	const [analysisModalOpened, setAnalysisModalOpened] = useState(false);
+	const storedSettings = useMemo(() => readPortfolioUiSettings(), []);
 	const [selectedPromptTemplate, setSelectedPromptTemplate] = useState(
-		PROMPT_TEMPLATES[0].key,
+		storedSettings.selectedPromptTemplate || PROMPT_TEMPLATES[0].key,
 	);
-
-	// Настройки колонок для всех типов инструментов
-	const [allColumns, setAllColumns] = useState<ColumnConfig[]>([
-		// Общие колонки (для всех типов)
-		{ key: 'instrument', label: 'Instrument', enabled: true, type: 'all' },
-		{ key: 'price', label: 'Price', enabled: true, type: 'all' },
-		{ key: 'value', label: 'Value', enabled: true, type: 'all' },
-		{ key: 'yield', label: 'Yield', enabled: true, type: 'all' },
-		{ key: 'percent', label: '%', enabled: true, type: 'all' },
-
-		// Колонки для облигаций
-		{ key: 'maturity', label: 'Срок', enabled: true, type: 'bond' },
-		{ key: 'rating', label: 'Рейтинг', enabled: true, type: 'bond' },
-		{ key: 'ytm', label: 'YTM', enabled: true, type: 'bond' },
-		{ key: 'duration', label: 'Дюрация', enabled: true, type: 'bond' },
-		{ key: 'coupon', label: 'Купон', enabled: true, type: 'bond' },
-		{ key: 'bondPrice', label: 'Цена %', enabled: false, type: 'bond' },
-		{ key: 'volume', label: 'Объем', enabled: false, type: 'bond' },
-
-		// Колонки для акций
-		{ key: 'dividend', label: 'Дивиденды', enabled: false, type: 'share' },
-		{ key: 'sector', label: 'Сектор', enabled: false, type: 'share' },
-
-		// Колонки для ETF
-		{ key: 'expense', label: 'Комиссия', enabled: false, type: 'etf' },
-		{ key: 'provider', label: 'Провайдер', enabled: false, type: 'etf' },
-	]);
+	const [allColumns, setAllColumns] = useState<ColumnConfig[]>(
+		(storedSettings.allColumns as ColumnConfig[]) || DEFAULT_COLUMNS,
+	);
 
 	const sortRules = ["share", "bond", "etf", "currency"];
 
 	// Функция для переключения колонки
 	const toggleColumn = (key: string) => {
-		setAllColumns(prev =>
-			prev.map(col =>
-				col.key === key ? { ...col, enabled: !col.enabled } : col
-			)
+		setAllColumns((prev) =>
+			prev.map((col) =>
+				col.key === key ? { ...col, enabled: !col.enabled } : col,
+			),
 		);
 	};
 
 	// Функция для сброса к настройкам по умолчанию
 	const resetToDefault = () => {
-		setAllColumns(prev =>
-			prev.map(col => ({
+		setAllColumns((prev) =>
+			prev.map((col) => ({
 				...col,
-				enabled: ['instrument', 'price', 'value', 'yield', 'percent', 'maturity', 'rating', 'ytm', 'duration', 'coupon'].includes(col.key)
-			}))
+				enabled: [
+					"instrument",
+					"price",
+					"value",
+					"yield",
+					"percent",
+					"currencyCode",
+					"maturity",
+					"rating",
+					"ytm",
+					"duration",
+					"coupon",
+				].includes(col.key),
+			})),
 		);
 	};
 
-	const portfoliosWithGroupedPositions =
-		portfolios?.map((portfolioData, index) => {
+	const portfoliosWithGroupedPositions = useMemo(
+		() =>
+			portfolios?.map((portfolioData, index) => {
 			const positionsByType: Record<string, any[]> = {
 				share: [],
 				bond: [],
@@ -231,8 +184,9 @@ export const PositionsTable = reatomComponent(() => {
 
 			portfolioData.positions.forEach((positionData) => {
 				const instrument = positionData.instrument.instrument;
-				const bondData = bondsMap?.[instrument?.isin || ''] ||
-							   bondsMap?.[instrument?.name || ''];
+				const bondData =
+					bondsMap?.[instrument?.isin || ""] ||
+					bondsMap?.[instrument?.name || ""];
 
 				const position = {
 					accountName: positionData.accountName,
@@ -246,7 +200,11 @@ export const PositionsTable = reatomComponent(() => {
 					currentPrice: positionData.position.currentPrice,
 					expectedYield: positionData.position.expectedYield,
 					currentNkd: positionData.position.currentNkd,
-					currency: positionData.position.averagePositionPrice?.currency || "rub",
+					currency:
+						instrument?.currency ||
+						positionData.position.currentPrice?.currency ||
+						positionData.position.averagePositionPrice?.currency ||
+						"rub",
 					// Данные из обогащения
 					bondRating: bondData?.creditRating,
 					bondYtm: bondData?.ytm,
@@ -264,20 +222,45 @@ export const PositionsTable = reatomComponent(() => {
 			});
 
 			const rawName = portfolioData.positions[0]?.accountName;
-			const accountName = rawName && rawName.trim().length > 0
-				? rawName
-				: `Счёт #${index + 1}`;
+			const accountName =
+				rawName && rawName.trim().length > 0 ? rawName : `Счёт #${index + 1}`;
+			const accountId =
+				portfolioData.portfolio.accountId ||
+				portfolioData.positions[0]?.accountId ||
+				`${index}`;
 
 			return {
-				id: `${index}`,
+				id: accountId,
 				accountName,
 				positionsByType,
 			};
-		}) ?? [];
-
-	const [selectedPortfolio, setSelectedPortfolio] = useState(
-		portfoliosWithGroupedPositions[0]?.id,
+		}) ?? [],
+		[portfolios, bondsMap],
 	);
+
+	const [selectedPortfolio, setSelectedPortfolio] = useState<string | null>(
+		storedSettings.selectedPortfolioId || null,
+	);
+
+	useEffect(() => {
+		if (!portfoliosWithGroupedPositions.length) return;
+		if (
+			selectedPortfolio &&
+			portfoliosWithGroupedPositions.some((p) => p.id === selectedPortfolio)
+		) {
+			return;
+		}
+		setSelectedPortfolio(portfoliosWithGroupedPositions[0]?.id || null);
+	}, [portfoliosWithGroupedPositions, selectedPortfolio]);
+
+	useEffect(() => {
+		const payload: PortfolioUiSettings = {
+			selectedPortfolioId: selectedPortfolio,
+			selectedPromptTemplate,
+			allColumns,
+		};
+		localStorage.setItem(PORTFOLIO_UI_SETTINGS_KEY, JSON.stringify(payload));
+	}, [allColumns, selectedPortfolio, selectedPromptTemplate]);
 
 	if (!portfolios) return null;
 
@@ -310,7 +293,8 @@ export const PositionsTable = reatomComponent(() => {
 	);
 
 	positionsWithValue.forEach((p) => {
-		p.percent = portfolioTotal === 0 ? 0 : (p.valueNumber / portfolioTotal) * 100;
+		p.percent =
+			portfolioTotal === 0 ? 0 : (p.valueNumber / portfolioTotal) * 100;
 	});
 
 	const allocation: Record<string, number> = {
@@ -328,100 +312,185 @@ export const PositionsTable = reatomComponent(() => {
 		type,
 		percent: portfolioTotal ? (value / portfolioTotal) * 100 : 0,
 	}));
+	const allocationDetails = sortRules
+		.map((type) => {
+			const value = allocation[type] || 0;
+			const percent = portfolioTotal ? (value / portfolioTotal) * 100 : 0;
+			const positionsCount = positionsWithValue.filter(
+				(p) => p.instrumentType === type,
+			).length;
+			return { type, value, percent, positionsCount };
+		})
+		.filter((item) => item.positionsCount > 0 || item.value !== 0)
+		.sort((a, b) => b.value - a.value);
+	const dominantAllocation = allocationDetails[0];
+
+	const bondPositions = positionsWithValue.filter((p) => p.instrumentType === "bond");
+	const bondCount = bondPositions.length;
+	const weightedYtm =
+		bondPositions.reduce((sum, p) => sum + (p.bondYtm || 0) * p.valueNumber, 0) /
+		Math.max(
+			bondPositions.reduce((sum, p) => sum + p.valueNumber, 0),
+			1,
+		);
+	const weightedDuration =
+		bondPositions.reduce(
+			(sum, p) => sum + (p.bondDuration || 0) * p.valueNumber,
+			0,
+		) /
+		Math.max(
+			bondPositions.reduce((sum, p) => sum + p.valueNumber, 0),
+			1,
+		);
+	const weightedCoupon =
+		bondPositions.reduce((sum, p) => sum + (p.bondCoupon || 0) * p.valueNumber, 0) /
+		Math.max(
+			bondPositions.reduce((sum, p) => sum + p.valueNumber, 0),
+			1,
+		);
+	const bondShare = allocationPercent.find((a) => a.type === "bond")?.percent || 0;
+	const totalBondValue = Math.max(
+		bondPositions.reduce((sum, p) => sum + p.valueNumber, 0),
+		1,
+	);
+	const highYieldShare =
+		bondPositions.reduce((sum, p) => {
+			const rating = String(p.bondRating || "").toUpperCase();
+			const isHighYield =
+				rating.startsWith("BB") ||
+				rating.startsWith("B") ||
+				rating.includes("CCC") ||
+				rating.includes("CC") ||
+				rating.includes("C");
+
+			return sum + (isHighYield ? p.valueNumber : 0);
+		}, 0) / totalBondValue;
+
+	const ratingWeights = bondPositions.reduce(
+		(acc, p) => {
+			const rating = String(p.bondRating || "NR").toUpperCase();
+			if (rating.startsWith("AAA") || rating.startsWith("AA")) acc.ig += p.valueNumber;
+			else if (rating.startsWith("A")) acc.a += p.valueNumber;
+			else if (rating.startsWith("BBB")) acc.bbb += p.valueNumber;
+			else if (rating.startsWith("BB") || rating.startsWith("B")) {
+				acc.hy += p.valueNumber;
+			} else {
+				acc.nr += p.valueNumber;
+			}
+			return acc;
+		},
+		{ ig: 0, a: 0, bbb: 0, hy: 0, nr: 0 },
+	);
+
+	const ratingDistribution = [
+		{
+			key: "ig",
+			label: "AAA-AA",
+			value: (ratingWeights.ig / totalBondValue) * 100,
+			color: "teal",
+		},
+		{
+			key: "a",
+			label: "A",
+			value: (ratingWeights.a / totalBondValue) * 100,
+			color: "green",
+		},
+		{
+			key: "bbb",
+			label: "BBB",
+			value: (ratingWeights.bbb / totalBondValue) * 100,
+			color: "blue",
+		},
+		{
+			key: "hy",
+			label: "BB-B",
+			value: (ratingWeights.hy / totalBondValue) * 100,
+			color: "orange",
+		},
+		{
+			key: "nr",
+			label: "NR/ниже",
+			value: (ratingWeights.nr / totalBondValue) * 100,
+			color: "gray",
+		},
+	];
+
+	const avgRatingRiskScore = ratingDistribution.reduce((score, item) => {
+		const weight = item.value / 100;
+		const bucketScore =
+			item.key === "ig"
+				? 15
+				: item.key === "a"
+					? 25
+					: item.key === "bbb"
+						? 45
+						: item.key === "hy"
+							? 75
+							: 85;
+		return score + weight * bucketScore;
+	}, 0);
+
+	const creditRisk = Math.min(100, Math.round(avgRatingRiskScore + highYieldShare * 25));
+	const rateRisk = Math.min(100, Math.round(weightedDuration * 18));
+	const lowLiquidityShare =
+		bondPositions.reduce((sum, p) => {
+			const volume = Number(p.bondVolume || 0);
+			return sum + (volume > 0 && volume < 10 ? p.valueNumber : 0);
+		}, 0) / totalBondValue;
+	const liquidityRisk = Math.min(
+		100,
+		Math.round(lowLiquidityShare * 100 + (bondPositions.length ? 15 : 0)),
+	);
 
 	// Получаем активные колонки по типу
 	const getActiveColumnsForType = (type: string) => {
-		return allColumns.filter(col =>
-			(col.type === 'all' || col.type === type) && col.enabled
+		return allColumns.filter(
+			(col) => (col.type === "all" || col.type === type) && col.enabled,
 		);
 	};
 
-	const csvEscape = (value: string) => {
-		const escaped = value.replace(/"/g, "\"\"");
-		return `"${escaped}"`;
-	};
+	const renderColumnCheckbox = (col: ColumnConfig) => (
+		<Checkbox
+			key={col.key}
+			checked={col.enabled}
+			onChange={() => toggleColumn(col.key)}
+			label={
+				<Tooltip
+					label={COLUMN_DESCRIPTIONS[col.key] || "Описание показателя"}
+					multiline
+					w={260}
+					position="right"
+					withArrow
+				>
+					<Text
+						span
+						style={{ cursor: "help", textDecoration: "underline dotted" }}
+					>
+						{col.label}
+					</Text>
+				</Tooltip>
+			}
+		/>
+	);
 
-	const formatQuantity = (quantity: any): string => {
-		const raw = moneyToNumber(quantity);
-		const digits = Number.isInteger(raw) ? 0 : 4;
-		return formatNumber(raw, digits);
-	};
-
-	const buildPortfolioForPrompt = () => {
-		const rows = sortRules.flatMap((type) =>
-			positionsWithValue
-				.filter((p) => p.instrumentType === type)
-				.sort((a, b) => b.percent - a.percent),
-		);
-
-		return rows
-			.map((position, index) => {
-				const yieldValue = position.bondYtm
-					? `${formatNumber(position.bondYtm, 1)}%`
-					: formatPrice(position.expectedYield);
-
-				return `${index + 1}. ${position.instrumentName || "-"}
-ISIN: ${position.isin || "-"}
-доля: ${position.percent.toFixed(2)}%
-цена покупки: ${formatPrice(position.averagePrice)}
-текущая цена: ${formatPrice(position.currentPrice)}
-колличесво: ${formatQuantity(position.quantity)}
-доходность: ${yieldValue}
-погашение: ${position.bondMaturity || "-"}
-валюта: ${(position.currency || "-").toUpperCase()}
-
----`;
-			})
-			.join("\n\n");
-	};
-
-	const getAnalysisPrompt = () => {
-		const template = PROMPT_TEMPLATES.find((t) => t.key === selectedPromptTemplate);
-		if (!template) return "";
-		return template.template.replace("{{portfolio}}", buildPortfolioForPrompt());
-	};
+	const sortedRows: ExportRow[] = sortRules.flatMap((type) =>
+		positionsWithValue
+			.filter((p) => p.instrumentType === type)
+			.sort((a, b) => b.percent - a.percent),
+	);
 
 	const exportCurrentTableToCsv = () => {
-		const rows = sortRules.flatMap((type) =>
-			positionsWithValue
-				.filter((p) => p.instrumentType === type)
-				.sort((a, b) => b.percent - a.percent),
+		if (!sortedRows.length) return;
+
+		const { csv, filename } = buildPortfolioCsv(
+			sortedRows,
+			portfolio.accountName,
 		);
-
-		if (!rows.length) return;
-
-		const header = [
-			"ISIN",
-			"Название",
-			"Доля в портфеле",
-			"Текущая цена",
-			"Количество",
-		]
-			.map(csvEscape)
-			.join(";");
-
-		const csvRows = rows.map((position) =>
-			[
-				position.isin || "",
-				position.instrumentName || "",
-				`${position.percent.toFixed(2)}%`,
-				formatPrice(position.currentPrice),
-				formatQuantity(position.quantity),
-			]
-				.map((value) => csvEscape(String(value)))
-				.join(";"),
-		);
-
-		const csv = [header, ...csvRows].join("\n");
 		const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
 		const link = document.createElement("a");
 		const url = URL.createObjectURL(blob);
-		const date = new Date().toISOString().slice(0, 10);
 		link.setAttribute("href", url);
-		link.setAttribute(
-			"download",
-			`portfolio_${portfolio.accountName.replace(/\s+/g, "_")}_${date}.csv`,
-		);
+		link.setAttribute("download", filename);
 		link.style.visibility = "hidden";
 		document.body.appendChild(link);
 		link.click();
@@ -430,8 +499,17 @@ ISIN: ${position.isin || "-"}
 	};
 
 	return (
-		<Flex maw={1400} direction="column" style={{ margin: "30px auto" }}>
-			<Flex justify="space-between" align="center">
+		<Flex
+			maw={1400}
+			direction="column"
+			gap="md"
+			style={{ margin: "10px auto" }}
+		>
+			<Flex
+				className="portfolio-toolbar"
+				justify="space-between"
+				align="center"
+			>
 				<Select
 					label="Accounts"
 					data={portfoliosWithGroupedPositions.map((p) => ({
@@ -440,13 +518,12 @@ ISIN: ${position.isin || "-"}
 					}))}
 					value={selectedPortfolio}
 					onChange={(v) => setSelectedPortfolio(v!)}
-					mb="lg"
-					maw={300}
+					maw={400}
 				/>
 
 				<Flex gap="sm">
 					<Button
-						variant="light"
+						variant={isDark ? "default" : "light"}
 						size="sm"
 						onClick={() => setAnalysisModalOpened(true)}
 					>
@@ -454,7 +531,7 @@ ISIN: ${position.isin || "-"}
 					</Button>
 
 					<Button
-						variant="light"
+						variant={isDark ? "default" : "light"}
 						size="sm"
 						onClick={exportCurrentTableToCsv}
 					>
@@ -470,7 +547,7 @@ ISIN: ${position.isin || "-"}
 					>
 						<Popover.Target>
 							<Button
-								variant="light"
+								variant={isDark ? "default" : "light"}
 								size="sm"
 								onClick={() => setColumnsPopoverOpened((o) => !o)}
 							>
@@ -479,28 +556,26 @@ ISIN: ${position.isin || "-"}
 						</Popover.Target>
 						<Popover.Dropdown>
 							<Stack gap="md">
+								<Text size="xs" c="dimmed">
+									Наведите на показатель, чтобы увидеть пояснение.
+								</Text>
+
 								<Stack gap="xs">
-									<Text size="sm" fw={500}>Общие колонки</Text>
-									{allColumns.filter(col => col.type === 'all').map(col => (
-										<Checkbox
-											key={col.key}
-											label={col.label}
-											checked={col.enabled}
-											onChange={() => toggleColumn(col.key)}
-										/>
-									))}
+									<Text size="sm" fw={500}>
+										Общие колонки
+									</Text>
+									{allColumns
+										.filter((col) => col.type === "all")
+										.map(renderColumnCheckbox)}
 								</Stack>
 
 								<Stack gap="xs">
-									<Text size="sm" fw={500}>Облигации</Text>
-									{allColumns.filter(col => col.type === 'bond').map(col => (
-										<Checkbox
-											key={col.key}
-											label={col.label}
-											checked={col.enabled}
-											onChange={() => toggleColumn(col.key)}
-										/>
-									))}
+									<Text size="sm" fw={500}>
+										Облигации
+									</Text>
+									{allColumns
+										.filter((col) => col.type === "bond")
+										.map(renderColumnCheckbox)}
 								</Stack>
 
 								<Button variant="subtle" size="xs" onClick={resetToDefault}>
@@ -512,7 +587,9 @@ ISIN: ${position.isin || "-"}
 				</Flex>
 			</Flex>
 
-			<Title order={3}>Портфель: {portfolio.accountName}</Title>
+			<Title order={3} fw={800}>
+				Портфель: {portfolio.accountName}
+			</Title>
 
 			<Text size="lg" fw={600} mb="md">
 				Общая стоимость:{" "}
@@ -523,39 +600,213 @@ ISIN: ${position.isin || "-"}
 				}).format(portfolioTotal)}
 			</Text>
 
-			{/* Allocation Bar */}
-			<Flex h={14} mb="lg" style={{ borderRadius: 6, overflow: "hidden" }}>
-				{allocationPercent.map((a) => (
-					<Box
-						key={a.type}
-						style={{
-							width: `${a.percent}%`,
-							background: `var(--mantine-color-${typeColors[a.type]}-6)`,
-						}}
-					/>
-				))}
-			</Flex>
+			<Paper withBorder radius="lg" p="md">
+				<Stack gap="md">
+					<Title order={5}>Сводка по портфелю</Title>
+					<SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+						<Paper withBorder radius="md" p="sm">
+							<Text size="xs" c="dimmed">
+								Позиций
+							</Text>
+							<Text size="xl" fw={700}>
+								{positionsWithValue.length}
+							</Text>
+						</Paper>
+						<Paper withBorder radius="md" p="sm">
+							<Text size="xs" c="dimmed">
+								Доля облигаций
+							</Text>
+							<Text size="xl" fw={700}>
+								{bondShare.toFixed(1)}%
+							</Text>
+						</Paper>
+						<Paper withBorder radius="md" p="sm">
+							<Text size="xs" c="dimmed">
+								Средний YTM (взв.)
+							</Text>
+							<Text size="xl" fw={700}>
+								{bondCount ? `${weightedYtm.toFixed(1)}%` : "—"}
+							</Text>
+						</Paper>
+						<Paper withBorder radius="md" p="sm">
+							<Text size="xs" c="dimmed">
+								Средняя дюрация (взв.)
+							</Text>
+							<Text size="xl" fw={700}>
+								{bondCount ? `${weightedDuration.toFixed(2)} г.` : "—"}
+							</Text>
+						</Paper>
+					</SimpleGrid>
 
-			{/* Pie Chart */}
-			<Flex mb="xl" gap="lg" align="center">
-				<RingProgress
-					size={140}
-					thickness={16}
-					sections={allocationPercent.map((a) => ({
-						value: a.percent,
-						color: typeColors[a.type],
-					}))}
-				/>
-
-				<Flex direction="column" gap={4}>
-					{allocationPercent.map((a) => (
-						<Text key={a.type} size="sm">
-							{typeToRussian[a.type as keyof typeof typeToRussian]} —{" "}
-							{a.percent.toFixed(1)}%
+					<Stack gap={6}>
+						<Text size="xs" c="dimmed">
+							Купонный профиль портфеля
 						</Text>
-					))}
-				</Flex>
-			</Flex>
+						<Progress value={Math.min(100, weightedCoupon * 2)} radius="xl" />
+						<Text size="xs">
+							{bondCount ? `${weightedCoupon.toFixed(2)}%` : "—"}
+						</Text>
+					</Stack>
+
+					<Stack gap={8}>
+						<Text size="xs" c="dimmed">
+							Risk strip
+						</Text>
+						<SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+							<Paper withBorder radius="md" p="xs">
+								<Flex justify="space-between" mb={4}>
+									<Text size="xs" c="dimmed">
+										Credit risk
+									</Text>
+									<Text size="xs" fw={700}>
+										{creditRisk}
+									</Text>
+								</Flex>
+								<Progress value={creditRisk} color="orange" radius="xl" />
+							</Paper>
+
+							<Paper withBorder radius="md" p="xs">
+								<Flex justify="space-between" mb={4}>
+									<Text size="xs" c="dimmed">
+										Rate risk
+									</Text>
+									<Text size="xs" fw={700}>
+										{rateRisk}
+									</Text>
+								</Flex>
+								<Progress value={rateRisk} color="blue" radius="xl" />
+							</Paper>
+
+							<Paper withBorder radius="md" p="xs">
+								<Flex justify="space-between" mb={4}>
+									<Text size="xs" c="dimmed">
+										Liquidity risk
+									</Text>
+									<Text size="xs" fw={700}>
+										{liquidityRisk}
+									</Text>
+								</Flex>
+								<Progress value={liquidityRisk} color="grape" radius="xl" />
+							</Paper>
+						</SimpleGrid>
+					</Stack>
+
+					<Stack gap={8}>
+						<Text size="xs" c="dimmed">
+							Распределение рейтингов (по стоимости облигаций)
+						</Text>
+						<Flex h={14} style={{ borderRadius: 999, overflow: "hidden" }}>
+							{ratingDistribution.map((item) => (
+								<Box
+									key={item.key}
+									style={{
+										width: `${item.value}%`,
+										background: `var(--mantine-color-${item.color}-${isDark ? 4 : 6})`,
+									}}
+								/>
+							))}
+						</Flex>
+						<SimpleGrid cols={{ base: 2, md: 5 }} spacing="xs">
+							{ratingDistribution.map((item) => (
+								<Flex key={item.key} gap={6} align="center">
+									<ThemeIcon size={10} radius="xl" color={item.color} />
+									<Text size="xs">
+										{item.label}: {item.value.toFixed(1)}%
+									</Text>
+								</Flex>
+							))}
+						</SimpleGrid>
+					</Stack>
+				</Stack>
+			</Paper>
+
+			<Paper withBorder radius="lg" p="md" mb="xl">
+				<Stack gap="md">
+					<Group justify="space-between" align="end">
+						<Title order={5}>Структура активов</Title>
+						<Text size="xs" c="dimmed">
+							Доминирует:{" "}
+							{dominantAllocation
+								? `${typeToRussian[dominantAllocation.type as keyof typeof typeToRussian]} (${dominantAllocation.percent.toFixed(1)}%)`
+								: "—"}
+						</Text>
+					</Group>
+
+					<SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+						<Flex justify="center" align="center">
+							<RingProgress
+								size={190}
+								thickness={20}
+								roundCaps
+								sections={allocationDetails.map((item) => ({
+									value: item.percent,
+									color: `${typeColors[item.type]}.${isDark ? 4 : 6}`,
+								}))}
+								label={
+									<Stack gap={0} align="center">
+										<Text size="xs" c="dimmed">
+											Итого
+										</Text>
+										<Text fw={800} size="sm">
+											{new Intl.NumberFormat("ru-RU", {
+												style: "currency",
+												currency: "RUB",
+												maximumFractionDigits: 0,
+											}).format(portfolioTotal)}
+										</Text>
+									</Stack>
+								}
+							/>
+						</Flex>
+
+						<Stack gap="xs">
+							<Flex h={14} style={{ borderRadius: 999, overflow: "hidden" }}>
+								{allocationDetails.map((item) => (
+									<Box
+										key={`allocation-strip-${item.type}`}
+										style={{
+											width: `${item.percent}%`,
+											background: `var(--mantine-color-${typeColors[item.type]}-${isDark ? 4 : 6})`,
+										}}
+									/>
+								))}
+							</Flex>
+							{allocationDetails.map((item) => (
+								<Paper key={`allocation-card-${item.type}`} withBorder radius="md" p="xs">
+									<Group justify="space-between" align="center">
+										<Group gap={8}>
+											<ThemeIcon
+												size={12}
+												radius="xl"
+												color={typeColors[item.type]}
+												variant="filled"
+											/>
+											<Text size="sm" fw={600}>
+												{typeToRussian[item.type as keyof typeof typeToRussian]}
+											</Text>
+										</Group>
+										<Text size="sm" fw={700}>
+											{item.percent.toFixed(1)}%
+										</Text>
+									</Group>
+									<Group justify="space-between" mt={4}>
+										<Text size="xs" c="dimmed">
+											{new Intl.NumberFormat("ru-RU", {
+												style: "currency",
+												currency: "RUB",
+												maximumFractionDigits: 0,
+											}).format(item.value)}
+										</Text>
+										<Text size="xs" c="dimmed">
+											{item.positionsCount} поз.
+										</Text>
+									</Group>
+								</Paper>
+							))}
+						</Stack>
+					</SimpleGrid>
+				</Stack>
+			</Paper>
 
 			{sortRules.map((type) => {
 				const positions = positionsWithValue
@@ -572,20 +823,32 @@ ISIN: ${position.isin || "-"}
 							<Title order={4} c="dimmed">
 								{typeToRussian[type as keyof typeof typeToRussian]}
 							</Title>
-							{type === 'bond' && bondsLoading && (
-								<Badge size="sm" variant="dot">Загрузка рейтингов...</Badge>
+							{type === "bond" && bondsLoading && (
+								<Badge size="sm" variant="dot">
+									Загрузка рейтингов...
+								</Badge>
 							)}
-							{type === 'bond' && !isEnriched && (
-								<Badge size="sm" color="yellow">Ожидание данных...</Badge>
+							{type === "bond" && !isEnriched && (
+								<Badge size="sm" color="yellow">
+									Ожидание данных...
+								</Badge>
 							)}
 						</Flex>
 
-						<Paper shadow="xs" radius={12} withBorder style={{ overflowX: 'auto' }}>
+						<Paper
+							shadow="xs"
+							radius={12}
+							withBorder
+							style={{ overflowX: "auto" }}
+						>
 							<Table highlightOnHover verticalSpacing="md">
 								<Table.Thead>
 									<Table.Tr>
-										{activeColumns.map(col => (
-											<Table.Th key={col.key} ta={col.key === 'instrument' ? 'left' : 'right'}>
+										{activeColumns.map((col) => (
+											<Table.Th
+												key={col.key}
+												ta={col.key === "instrument" ? "left" : "right"}
+											>
 												{col.label}
 											</Table.Th>
 										))}
@@ -597,14 +860,14 @@ ISIN: ${position.isin || "-"}
 										const diff = formatDateDifference(position.bondMaturity);
 										const eventType = getEventType(
 											position.bondEventAtDate,
-											position.bondFinalMaturity
+											position.bondFinalMaturity,
 										);
 
 										return (
 											<Table.Tr key={position.ticker}>
-												{activeColumns.map(col => {
-													switch(col.key) {
-														case 'instrument':
+												{activeColumns.map((col) => {
+													switch (col.key) {
+														case "instrument":
 															return (
 																<Table.Td key={col.key}>
 																	<Flex gap="sm">
@@ -615,7 +878,9 @@ ISIN: ${position.isin || "-"}
 																			src={`//invest-brands.cdn-tinkoff.ru/${position.img}x160.png`}
 																		/>
 																		<Flex direction="column">
-																			<Text size="sm">{position.instrumentName}</Text>
+																			<Text size="sm">
+																				{position.instrumentName}
+																			</Text>
 																			<Text size="xs" c="gray">
 																				{position.ticker}
 																			</Text>
@@ -624,7 +889,7 @@ ISIN: ${position.isin || "-"}
 																</Table.Td>
 															);
 
-														case 'price':
+														case "price":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	<Tooltip label="Средняя → Текущая">
@@ -636,11 +901,13 @@ ISIN: ${position.isin || "-"}
 																</Table.Td>
 															);
 
-														case 'value':
+														case "value":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	<Flex direction="column">
-																		<Text size="sm">{formatPrice(position.value)}</Text>
+																		<Text size="sm">
+																			{formatPrice(position.value)}
+																		</Text>
 																		<Text size="xs" c="gray">
 																			{position.quantity.units} шт
 																		</Text>
@@ -648,11 +915,13 @@ ISIN: ${position.isin || "-"}
 																</Table.Td>
 															);
 
-														case 'yield':
+														case "yield":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	<Badge
-																		color={getYieldColor(position.expectedYield)}
+																		color={getYieldColor(
+																			position.expectedYield,
+																		)}
 																		variant="light"
 																	>
 																		{formatPrice(position.expectedYield)}
@@ -660,14 +929,38 @@ ISIN: ${position.isin || "-"}
 																</Table.Td>
 															);
 
-														case 'percent':
+														case "percent":
 															return (
 																<Table.Td key={col.key} ta="right">
-																	<Text fw={500}>{position.percent.toFixed(2)}%</Text>
+																	<Text fw={500}>
+																		{position.percent.toFixed(2)}%
+																	</Text>
 																</Table.Td>
 															);
 
-														case 'maturity':
+														case "currencyCode":
+															return (
+																<Table.Td key={col.key} ta="right">
+																	<Badge variant="light" color="gray">
+																		{(position.currency || "—").toUpperCase()}
+																	</Badge>
+																</Table.Td>
+															);
+
+														case "accrued":
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.currentNkd ? (
+																		<Text size="sm">{formatPrice(position.currentNkd)}</Text>
+																	) : (
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
+																	)}
+																</Table.Td>
+															);
+
+														case "maturity":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondMaturity ? (
@@ -679,18 +972,42 @@ ISIN: ${position.isin || "-"}
 																			</Badge>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'rating':
+														case "event":
+															return (
+																<Table.Td key={col.key} ta="right">
+																	{position.bondEventAtDate ? (
+																		<Text size="sm">
+																			{getEventType(
+																				position.bondEventAtDate,
+																				position.bondFinalMaturity,
+																			)}
+																		</Text>
+																	) : (
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
+																	)}
+																</Table.Td>
+															);
+
+														case "rating":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondRating ? (
-																		<Tooltip label={`Кредитный рейтинг: ${position.bondRating}`}>
+																		<Tooltip
+																			label={`Кредитный рейтинг: ${position.bondRating}`}
+																		>
 																			<Badge
-																				color={getRatingColor(position.bondRating)}
+																				color={getRatingColor(
+																					position.bondRating,
+																				)}
 																				variant="light"
 																				size="lg"
 																				style={{ minWidth: 60 }}
@@ -699,12 +1016,14 @@ ISIN: ${position.isin || "-"}
 																			</Badge>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'ytm':
+														case "ytm":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondYtm ? (
@@ -714,12 +1033,14 @@ ISIN: ${position.isin || "-"}
 																			</Badge>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'duration':
+														case "duration":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondDuration ? (
@@ -729,12 +1050,14 @@ ISIN: ${position.isin || "-"}
 																			</Text>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'coupon':
+														case "coupon":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondCoupon ? (
@@ -744,12 +1067,14 @@ ISIN: ${position.isin || "-"}
 																			</Text>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'bondPrice':
+														case "bondPrice":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondPrice ? (
@@ -759,22 +1084,27 @@ ISIN: ${position.isin || "-"}
 																			</Text>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
 
-														case 'volume':
+														case "volume":
 															return (
 																<Table.Td key={col.key} ta="right">
 																	{position.bondVolume ? (
 																		<Tooltip label="Объем выпуска (млрд)">
 																			<Text size="sm">
-																				{formatNumber(position.bondVolume, 2)} млрд
+																				{formatNumber(position.bondVolume, 2)}{" "}
+																				млрд
 																			</Text>
 																		</Tooltip>
 																	) : (
-																		<Text size="xs" c="dimmed">—</Text>
+																		<Text size="xs" c="dimmed">
+																			—
+																		</Text>
 																	)}
 																</Table.Td>
 															);
@@ -793,48 +1123,13 @@ ISIN: ${position.isin || "-"}
 				);
 			})}
 
-			<Modal
+			<AnalysisModal
 				opened={analysisModalOpened}
 				onClose={() => setAnalysisModalOpened(false)}
-				title="Промпт для анализа портфеля"
-				size="xl"
-			>
-				<Stack>
-					<Select
-						label="Шаблон промпта"
-						data={PROMPT_TEMPLATES.map((template) => ({
-							value: template.key,
-							label: template.label,
-						}))}
-						value={selectedPromptTemplate}
-						onChange={(value) =>
-							setSelectedPromptTemplate(value || PROMPT_TEMPLATES[0].key)
-						}
-					/>
-
-					<Textarea
-						label="Готовый промпт"
-						minRows={18}
-						autosize
-						value={getAnalysisPrompt()}
-						readOnly
-					/>
-
-					<Flex justify="space-between" align="center">
-						<Text size="xs" c="dimmed">
-							В промпт подставлен текущий выбранный портфель.
-						</Text>
-
-						<CopyButton value={getAnalysisPrompt()} timeout={1200}>
-							{({ copied, copy }) => (
-								<Button size="sm" onClick={copy}>
-									{copied ? "Скопировано" : "Копировать промпт"}
-								</Button>
-							)}
-						</CopyButton>
-					</Flex>
-				</Stack>
-			</Modal>
+				selectedPromptTemplate={selectedPromptTemplate}
+				onPromptTemplateChange={setSelectedPromptTemplate}
+				rows={sortedRows}
+			/>
 		</Flex>
 	);
 }, "PositionsTable");

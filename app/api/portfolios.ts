@@ -4,6 +4,7 @@ import type {
 	PortfolioPosition,
 	PortfolioResponse,
 } from "@tinkoff/invest-js-grpc-web";
+import { savePortfolioSnapshots } from "~/features/history/lib/snapshots";
 import { bondsMapAtom, fetchBonds } from "./bonds/store";
 import { api } from "./client";
 import { instrumentByUID } from "./instrumentByUID";
@@ -110,6 +111,7 @@ export const portfoliosModel = atom<PortfoliosState>(
 		try {
 			const response = await wrap(portfolios());
 			target.set((state) => ({ ...state, data: response }));
+			savePortfolioSnapshots(response);
 
 			await wrap(fetchBonds());
 			enrichWithBondsData();
