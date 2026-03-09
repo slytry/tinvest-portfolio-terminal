@@ -1,123 +1,126 @@
-import { create } from 'zustand';
-import type { Bond, BondsData } from './types';
-import { bondsApi } from './bonds';
+import { action, atom, computed, wrap } from "@reatom/core";
+import { bondsApi } from "./bonds";
+import type { Bond, BondsData } from "./types";
 
-interface BondsState {
-  bondsData: BondsData | null;
-  bondsMap: Record<string, Bond> | null;
-  isLoading: boolean;
-  error: string | null;
-  lastFetchTime: number | null;
-}
+const CACHE_DURATION_MS = 5 * 60 * 1000;
 
-interface BondsActions {
-  fetchBonds: (force?: boolean) => Promise<void>;
-  getBondByIsin: (isin: string) => Bond | null;
-  getBondByName: (name: string) => Bond | null;
-  enrichPosition: (position: any) => any;
-  enrichPositions: (positions: any[]) => any[];
-}
+type BondsState = {
+	data: BondsData | null;
+	map: Record<string, Bond> | null;
+	isLoading: boolean;
+	error: string | null;
+	lastFetchTime: number | null;
+};
 
-type BondsStore = BondsState & BondsActions;
+const toBondsMap = (data: BondsData): Record<string, Bond> => {
+	const map: Record<string, Bond> = {};
 
-export const useBondsStore = create<BondsStore>((set, get) => ({
-  bondsData: null,
-  bondsMap: null,
-  isLoading: false,
-  error: null,
-  lastFetchTime: null,
+	for (const bond of data.bonds) {
+		map[bond.isin] = bond;
+		if (bond.name) map[bond.name] = bond;
+	}
 
-  fetchBonds: async (force = false) => {
-    const { lastFetchTime, bondsData } = get();
-    const now = Date.now();
-    const CACHE_DURATION = 5 * 60 * 1000; // 5 минут
+	return map;
+};
 
-    // Используем кэш, если он свежий и не force
-    if (!force && bondsData && lastFetchTime && (now - lastFetchTime < CACHE_DURATION)) {
-      return;
-    }
+const getBond = (
+	bondsMap: Record<string, Bond> | null,
+	isin: string,
+	name: string,
+) => bondsMap?.[isin] || bondsMap?.[name] || null;
 
-    set({ isLoading: true, error: null });
+export const bondsModel = atom<BondsState>(
+	{
+		data: null,
+		map: null,
+		isLoading: false,
+		error: null,
+		lastFetchTime: null,
+	},
+	"bondsModel",
+).extend((target) => ({
+	fetch: action(async (force = false) => {
+		const now = Date.now();
+		const current = target();
 
-    try {
-      const data = await bondsApi.getLatestBonds();
+		if (
+			!force &&
+			current.data &&
+			current.lastFetchTime &&
+			now - current.lastFetchTime < CACHE_DURATION_MS
+		) {
+			return;
+		}
 
-      if (data) {
-        // Создаем маппинг для быстрого поиска
-        const map: Record<string, Bond> = {};
-        data.bonds.forEach(bond => {
-          map[bond.isin] = bond;
-          if (bond.name) map[bond.name] = bond;
-        });
+		target.set((state) => ({ ...state, isLoading: true, error: null }));
 
-        set({
-          bondsData: data,
-          bondsMap: map,
-          isLoading: false,
-          lastFetchTime: now,
-        });
-      } else {
-        set({ error: 'Failed to fetch bonds data', isLoading: false });
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        isLoading: false,
-      });
-    }
-  },
+		try {
+			const data = await wrap(bondsApi.getLatestBonds());
 
-  getBondByIsin: (isin: string) => {
-    const { bondsMap } = get();
-    return bondsMap?.[isin] || null;
-  },
+			if (!data) {
+				target.set((state) => ({
+					...state,
+					error: "Failed to fetch bonds data",
+					isLoading: false,
+				}));
+				return;
+			}
 
-  getBondByName: (name: string) => {
-    const { bondsMap } = get();
-    return bondsMap?.[name] || null;
-  },
-
-  enrichPosition: (position: any) => {
-    const { bondsMap } = get();
-
-    if (position.instrumentType !== 'bond') return position;
-
-    const bondData = bondsMap?.[position.isin || ''] ||
-                     bondsMap?.[position.instrumentName || ''];
-
-    if (bondData) {
-      return {
-        ...position,
-        bondData,
-        bondRating: bondData.creditRating,
-        bondYtm: bondData.ytm,
-        bondMaturity: bondData.maturityDate,
-      };
-    }
-
-    return position;
-  },
-
-  enrichPositions: (positions: any[]) => {
-    const { bondsMap } = get();
-
-    return positions.map(position => {
-      if (position.instrumentType !== 'bond') return position;
-
-      const bondData = bondsMap?.[position.isin || ''] ||
-                       bondsMap?.[position.instrumentName || ''];
-
-      if (bondData) {
-        return {
-          ...position,
-          bondData,
-          bondRating: bondData.creditRating,
-          bondYtm: bondData.ytm,
-          bondMaturity: bondData.maturityDate,
-        };
-      }
-
-      return position;
-    });
-  },
+			target.set((state) => ({
+				...state,
+				data,
+				map: toBondsMap(data),
+				lastFetchTime: now,
+				isLoading: false,
+			}));
+		} catch (error) {
+			target.set((state) => ({
+				...state,
+				error: error instanceof Error ? error.message : "Unknown error",
+				isLoading: false,
+			}));
+		}
+	}, "bondsModel.fetch"),
 }));
+
+export const bondsDataAtom = computed(() => bondsModel().data, "bondsDataAtom");
+export const bondsMapAtom = computed(() => bondsModel().map, "bondsMapAtom");
+export const bondsIsLoadingAtom = computed(
+	() => bondsModel().isLoading,
+	"bondsIsLoadingAtom",
+);
+export const bondsErrorAtom = computed(() => bondsModel().error, "bondsErrorAtom");
+export const bondsLastFetchTimeAtom = computed(
+	() => bondsModel().lastFetchTime,
+	"bondsLastFetchTimeAtom",
+);
+
+export const fetchBonds = bondsModel.fetch;
+
+export const enrichPositionWithBondData = <
+	T extends {
+		instrumentType?: string;
+		isin?: string;
+		instrumentName?: string;
+	},
+>(
+	position: T,
+	bondsMap: Record<string, Bond> | null,
+) => {
+	if (position.instrumentType !== "bond") return position;
+
+	const bondData = getBond(
+		bondsMap,
+		position.isin || "",
+		position.instrumentName || "",
+	);
+	if (!bondData) return position;
+
+	return {
+		...position,
+		bondData,
+		bondRating: bondData.creditRating,
+		bondYtm: bondData.ytm,
+		bondMaturity: bondData.maturityDate,
+	};
+};

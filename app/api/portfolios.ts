@@ -1,13 +1,13 @@
+import { action, atom, computed, wrap } from "@reatom/core";
 import type {
 	InstrumentResponse,
 	PortfolioPosition,
 	PortfolioResponse,
 } from "@tinkoff/invest-js-grpc-web";
-import { create } from "zustand";
+import { savePortfolioSnapshots } from "~/features/history/lib/snapshots";
+import { bondsMapAtom, fetchBonds } from "./bonds/store";
 import { api } from "./client";
 import { instrumentByUID } from "./instrumentByUID";
-import { useBondsStore } from "./bonds/store";
-
 
 export type AccountPortfolio = {
 	portfolio: PortfolioResponse;
@@ -19,17 +19,23 @@ export type ExtPosition = {
 	accountName: string;
 	position: PortfolioPosition;
 	instrument: InstrumentResponse;
-	// Добавляем поля для облигаций
 	bondRating?: string;
 	bondYtm?: number;
 	bondMaturity?: string;
-	bondData?: any;
+	bondData?: unknown;
+};
+
+type PortfoliosState = {
+	data: AccountPortfolio[] | null;
+	isLoading: boolean;
+	error: string | null;
+	isEnriched: boolean;
 };
 
 export const portfolios = async (): Promise<AccountPortfolio[]> => {
 	const accountsResponse = await api.users.getAccounts({});
 
-	const result = await Promise.all(
+	return Promise.all(
 		accountsResponse.accounts.map(async (account) => {
 			const portfolio = await api.operations.getPortfolio({
 				accountId: account.id,
@@ -43,104 +49,109 @@ export const portfolios = async (): Promise<AccountPortfolio[]> => {
 				position,
 				instrument: instruments[i],
 			}));
+
 			return { portfolio, positions };
 		}),
 	);
-
-	return result;
 };
 
-type PortfolioState = {
-	portfolios: AccountPortfolio[] | null;
-	isLoading: boolean;
-	error: string | null;
-	// Добавляем флаг, что данные обогащены
-	isEnriched: boolean;
-};
-
-type PortfolioActions = {
-	fetchPortfolios: () => Promise<void>;
-	// Новый метод для обогащения данных облигациями
-	enrichWithBondsData: () => Promise<void>;
-};
-
-type PortfolioStore = PortfolioState & PortfolioActions;
-
-export const usePortfoliosStore = create<PortfolioStore>((set, get) => ({
-	portfolios: null,
-	isLoading: true,
-	error: null,
-	isEnriched: false,
-
-	fetchPortfolios: async () => {
-		set({ isLoading: true, error: null, isEnriched: false });
-		try {
-			const response = await portfolios();
-			set({ portfolios: response, isLoading: false });
-
-			// Автоматически загружаем данные облигаций
-			const bondsStore = useBondsStore.getState();
-			await bondsStore.fetchBonds();
-
-			// Обогащаем данные
-			get().enrichWithBondsData();
-
-		} catch (error) {
-			set({
-				error:
-					error instanceof Error ? error.message : "Failed to fetch portfolios",
-				isLoading: false,
-			});
-		}
+export const portfoliosModel = atom<PortfoliosState>(
+	{
+		data: null,
+		isLoading: true,
+		error: null,
+		isEnriched: false,
 	},
+	"portfoliosModel",
+).extend((target) => {
+	const enrichWithBondsData = action(() => {
+		const items = target().data;
+		const bondsMap = bondsMapAtom();
 
-	enrichWithBondsData: async () => {
-		const { portfolios } = get();
-		const bondsStore = useBondsStore.getState();
+		if (!items || !bondsMap) return;
 
-		if (!portfolios || !bondsStore.bondsMap) return;
-
-		// Обогащаем каждую позицию
-		const enrichedPortfolios = portfolios.map(portfolio => ({
+		const enrichedPortfolios = items.map((portfolio) => ({
 			...portfolio,
-			positions: portfolio.positions.map(position => {
-				if (position.instrument.instrument?.instrumentType !== 'bond') {
+			positions: portfolio.positions.map((position) => {
+				if (position.instrument.instrument?.instrumentType !== "bond") {
 					return position;
 				}
 
-				const bondData = bondsStore.getBondByIsin(
-					position.instrument.instrument?.isin || ''
-				) || bondsStore.getBondByName(
-					position.instrument.instrument?.name || ''
-				);
+				const bondData =
+					bondsMap[position.instrument.instrument?.isin || ""] ||
+					bondsMap[position.instrument.instrument?.name || ""];
 
-				if (bondData) {
-					return {
-						...position,
-						bondRating: bondData.creditRating,
-						bondYtm: bondData.ytm,
-						bondMaturity: bondData.maturityDate,
-						bondData,
-					};
-				}
+				if (!bondData) return position;
 
-				return position;
+				return {
+					...position,
+					bondRating: bondData.creditRating,
+					bondYtm: bondData.ytm,
+					bondMaturity: bondData.maturityDate,
+					bondData,
+				};
 			}),
 		}));
 
-		set({ portfolios: enrichedPortfolios, isEnriched: true });
-	},
-}));
+		target.set((state) => ({
+			...state,
+			data: enrichedPortfolios,
+			isEnriched: true,
+		}));
+	}, "portfoliosModel.enrichWithBondsData");
 
-// Хук для получения обогащенных позиций
-export const useEnrichedPositions = () => {
-	const portfolios = usePortfoliosStore(state => state.portfolios);
-	const isEnriched = usePortfoliosStore(state => state.isEnriched);
+	const fetch = action(async () => {
+		target.set((state) => ({
+			...state,
+			isLoading: true,
+			error: null,
+			isEnriched: false,
+		}));
 
-	if (!portfolios) return [];
+		try {
+			const response = await wrap(portfolios());
+			target.set((state) => ({ ...state, data: response }));
+			savePortfolioSnapshots(response);
 
-	// Собираем все позиции со всех портфелей
-	const allPositions = portfolios.flatMap(p => p.positions);
+			await wrap(fetchBonds());
+			enrichWithBondsData();
+		} catch (error) {
+			target.set((state) => ({
+				...state,
+				error:
+					error instanceof Error ? error.message : "Failed to fetch portfolios",
+			}));
+		} finally {
+			target.set((state) => ({ ...state, isLoading: false }));
+		}
+	}, "portfoliosModel.fetch");
 
-	return { positions: allPositions, isEnriched };
-};
+	return { enrichWithBondsData, fetch };
+});
+
+export const portfoliosAtom = computed(
+	() => portfoliosModel().data,
+	"portfoliosAtom",
+);
+export const portfoliosIsLoadingAtom = computed(
+	() => portfoliosModel().isLoading,
+	"portfoliosIsLoadingAtom",
+);
+export const portfoliosErrorAtom = computed(
+	() => portfoliosModel().error,
+	"portfoliosErrorAtom",
+);
+export const portfoliosIsEnrichedAtom = computed(
+	() => portfoliosModel().isEnriched,
+	"portfoliosIsEnrichedAtom",
+);
+
+export const fetchPortfolios = portfoliosModel.fetch;
+export const enrichWithBondsData = portfoliosModel.enrichWithBondsData;
+
+export const allPositionsAtom = computed(() => {
+	const data = portfoliosModel().data;
+	if (!data) return [];
+
+	return data.flatMap((p) => p.positions);
+}, "allPositionsAtom");
