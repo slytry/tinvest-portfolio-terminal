@@ -1,17 +1,52 @@
 import { action, atom, computed, wrap } from "@reatom/core";
-import type {
-	InstrumentResponse,
-	PortfolioPosition,
-	PortfolioResponse,
-} from "@tinkoff/invest-js-grpc-web";
 import { savePortfolioSnapshots } from "~/features/history/lib/snapshots";
 import { bondsMapAtom, fetchBonds } from "./bonds/store";
-import { api } from "./client";
-import { instrumentByUID } from "./instrumentByUID";
 
-export type AccountPortfolio = {
-	portfolio: PortfolioResponse;
-	positions: ExtPosition[];
+export type MoneyValue = {
+	currency: string;
+	units: number;
+	nano: number;
+};
+
+export type Quotation = {
+	units: number;
+	nano: number;
+};
+
+export type PortfolioPosition = {
+	figi: string;
+	instrumentType: string;
+	quantity: Quotation;
+	averagePositionPrice: MoneyValue;
+	expectedYield: Quotation;
+	currentNkd: MoneyValue;
+	currentPrice: MoneyValue;
+	instrumentUid: string;
+};
+
+export type PortfolioResponse = {
+	accountId: string;
+	expectedYield: Quotation;
+	totalAmountPortfolio: MoneyValue;
+	totalAmountBonds: MoneyValue;
+	totalAmountShares: MoneyValue;
+	totalAmountEtf: MoneyValue;
+	totalAmountCurrencies: MoneyValue;
+	totalAmountFutures: MoneyValue;
+	positions: PortfolioPosition[];
+};
+
+export type InstrumentResponse = {
+	instrument: {
+		name: string;
+		ticker: string;
+		isin: string;
+		currency: string;
+		instrumentType: string;
+		brand?: {
+			logoName?: string;
+		};
+	};
 };
 
 export type ExtPosition = {
@@ -25,6 +60,11 @@ export type ExtPosition = {
 	bondData?: unknown;
 };
 
+export type AccountPortfolio = {
+	portfolio: PortfolioResponse;
+	positions: ExtPosition[];
+};
+
 type PortfoliosState = {
 	data: AccountPortfolio[] | null;
 	isLoading: boolean;
@@ -32,27 +72,23 @@ type PortfoliosState = {
 	isEnriched: boolean;
 };
 
+const fetchJSON = async <T>(url: string, init?: RequestInit): Promise<T> => {
+	const response = await fetch(url, {
+		credentials: "include",
+		headers: { "Content-Type": "application/json" },
+		...init,
+	});
+
+	if (!response.ok) {
+		const message = await response.text();
+		throw new Error(message || `Request failed: ${response.status}`);
+	}
+
+	return (await response.json()) as T;
+};
+
 export const portfolios = async (): Promise<AccountPortfolio[]> => {
-	const accountsResponse = await api.users.getAccounts({});
-
-	return Promise.all(
-		accountsResponse.accounts.map(async (account) => {
-			const portfolio = await api.operations.getPortfolio({
-				accountId: account.id,
-			});
-			const instruments = await Promise.all(
-				portfolio.positions.map((p) => instrumentByUID(p.instrumentUid)),
-			);
-			const positions = portfolio.positions.map((position, i) => ({
-				accountId: account.id,
-				accountName: account.name,
-				position,
-				instrument: instruments[i],
-			}));
-
-			return { portfolio, positions };
-		}),
-	);
+	return fetchJSON<AccountPortfolio[]>("/api/v1/portfolios");
 };
 
 export const portfoliosModel = atom<PortfoliosState>(
@@ -100,7 +136,7 @@ export const portfoliosModel = atom<PortfoliosState>(
 		}));
 	}, "portfoliosModel.enrichWithBondsData");
 
-	const fetch = action(async () => {
+	const fetchPortfoliosData = action(async () => {
 		target.set((state) => ({
 			...state,
 			isLoading: true,
@@ -126,13 +162,10 @@ export const portfoliosModel = atom<PortfoliosState>(
 		}
 	}, "portfoliosModel.fetch");
 
-	return { enrichWithBondsData, fetch };
+	return { enrichWithBondsData, fetch: fetchPortfoliosData };
 });
 
-export const portfoliosAtom = computed(
-	() => portfoliosModel().data,
-	"portfoliosAtom",
-);
+export const portfoliosAtom = computed(() => portfoliosModel().data, "portfoliosAtom");
 export const portfoliosIsLoadingAtom = computed(
 	() => portfoliosModel().isLoading,
 	"portfoliosIsLoadingAtom",

@@ -1,124 +1,107 @@
 # TInvest Portfolio Terminal
 
-Веб-приложение для анализа портфеля Тинькофф Инвестиций.
+Приложение разделено на **frontend (Vite + React + Reatom)** и **backend (Go)**.
 
-## Что умеет
-
-- Загрузка портфелей по всем счетам через Tinkoff Invest API.
-- Обогащение облигаций данными (рейтинг, YTM, дюрация, купон, срок).
-- Аналитика по портфелю:
-  - общая стоимость,
-  - доли позиций,
-  - аллокация по классам активов.
-- Гибкие колонки таблицы (с подсказками по каждому показателю).
-- Экспорт текущего портфеля в CSV (`ISIN`, `Название`, `Доля`, `Текущая цена`, `Количество`).
-- Генерация промпта для AI-анализа портфеля (в модальном окне, с копированием).
-- Переключение темы: `Светлая` / `Тёмная` / `Авто`.
+- Frontend: тонкий BFF-клиент (UI + состояние + форматирование)
+- Backend: бизнес-логика, интеграция с T-Invest API, агрегация данных
 
 ## Стек
 
-- React 19
-- Vite 7
-- TypeScript
-- Mantine UI
-- Reatom (`@reatom/core`, `@reatom/react`)
+- Frontend: React 19, Vite 7, TypeScript, Mantine, Reatom
+- Backend: Go 1.23, net/http
 
-## Требования
+## Запуск
 
-- Node.js `25.8.0` (см. `package.json`)
-- npm
-
-Рекомендуется `nvm`:
-
-```bash
-nvm install 25.8.0
-nvm use 25.8.0
-```
-
-## Установка
+### 1) Установить frontend зависимости
 
 ```bash
 npm install
 ```
 
-## Запуск
+### 2) Запустить backend
 
 ```bash
-npm run dev
+npm run dev:backend
 ```
 
-Обычно приложение доступно на [http://localhost:5173](http://localhost:5173).
+Backend по умолчанию слушает `http://localhost:8080`.
 
-## Сборка
+### 3) Запустить frontend
 
 ```bash
-npm run build
-npm start
+npm run dev:frontend
 ```
 
-`start` запускает `vite preview`.
+Frontend: `http://localhost:5173`.
 
-## Скрипты
+Vite проксирует `/api/*` на backend (`localhost:8080`).
 
-- `npm run dev` — dev-сервер Vite
-- `npm run build` — production build
-- `npm start` — preview production build
-- `npm run typecheck` — проверка TypeScript
-- `npm run check` — линт/проверки (`ultracite`)
-- `npm run fix` — автофикс
-- `npm run dohod:update` — обновление данных по облигациям из `scripts/bonds-dohod`
+## Проверки
 
-## Настройка токена
+```bash
+npm run typecheck
+npm run backend:test
+```
 
-1. Откройте экран `Токен` в шапке.
-2. Вставьте API токен Tinkoff Invest.
+## Авторизация
+
+1. Откройте страницу `Токен`.
+2. Вставьте API токен T-Invest.
 3. Нажмите `Сохранить и открыть портфель`.
 
-Токен сохраняется в `localStorage`.
+Токен хранится на backend в in-memory session store (по cookie сессии), а не в `localStorage`.
 
 ## Архитектура
 
+### Frontend (тонкий)
+
+- Только UI, роутинг, локальные настройки интерфейса
+- Все данные о портфеле/операциях грузятся с backend:
+  - `GET /api/v1/portfolios`
+  - `GET /api/v1/operations`
+  - `POST /api/v1/auth/token`
+
 ```text
-app/
-  api/                       # API-клиент и state-модели
-  features/
-    auth/
-      ui/
-    routing/
-      model.ts               # Reatom routes
-      app-router.tsx
-      theme-switcher.tsx
-    portfolio/
-      model/                 # доменные константы и шаблоны
-      lib/                   # форматирование/экспорт
-      ui/                    # страницы и компоненты
-  app-theme.tsx
-  app.css
-  main.tsx
-  setup.ts
+frontend/
+  app/
+  public/
+  scripts/
+  index.html
+  vite.config.ts
+  tsconfig.json
 ```
 
-### Ключевые модули
+### Backend (DDD + Clean Architecture)
 
-- `app/features/routing/model.ts` — маршрутизация на Reatom Router.
-- `app/features/routing/theme-switcher.tsx` — переключение темы.
-- `app/features/portfolio/ui/positions-table.tsx` — таблица портфеля.
-- `app/features/portfolio/ui/analysis-modal.tsx` — модалка промптов.
-- `app/features/portfolio/lib/export.ts` — CSV и генерация текста для AI-анализа.
-
-## Обновление данных по облигациям
-
-```bash
-npm run dohod:update
+```text
+backend/
+  cmd/server/
+    main.go
+  internal/
+    domain/
+      auth/
+      portfolio/
+      operations/
+    application/
+      auth/
+      portfolio/
+      operations/
+    infrastructure/
+      memory/          # in-memory token store
+      tbank/           # REST adapter to T-Invest API
+    interfaces/http/   # handlers + router
+    app/               # DI / composition root
 ```
 
-Команда выполняет:
+Слои:
 
-- `npm run dohod:load`
-- `npm run dohod:convert`
+- `domain`: сущности и интерфейсы репозиториев
+- `application`: use-cases
+- `infrastructure`: внешние адаптеры
+- `interfaces/http`: HTTP transport
 
-Результат попадает в `public/data`.
+## Важно
 
-## Известные проблемы
-
-Если Vite пишет про версию Node (`Vite requires Node.js 20.19+ or 22.12+`) — используйте версию из `package.json` (`25.8.0`).
+- Backend использует REST endpoint T-Invest API (`invest-public-api.tinkoff.ru/rest/...`).
+- Если API вернет ошибку авторизации или формата токена, frontend покажет текст ошибки от backend.
+- Все команды frontend выполняются из корня через `cd frontend && ...` (скрыто в npm scripts).

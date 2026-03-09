@@ -134,7 +134,8 @@ export const PositionsTable = reatomComponent(() => {
 		(storedSettings.allColumns as ColumnConfig[]) || DEFAULT_COLUMNS,
 	);
 
-	const sortRules = ["share", "bond", "etf", "currency"];
+	const sortRules = ["share", "bond", "etf", "currency"] as const;
+	const portfolioStructureOrder = [...sortRules, "other"] as const;
 
 	// Функция для переключения колонки
 	const toggleColumn = (key: string) => {
@@ -302,22 +303,34 @@ export const PositionsTable = reatomComponent(() => {
 		bond: 0,
 		etf: 0,
 		currency: 0,
+		other: 0,
 	};
 
 	positionsWithValue.forEach((p) => {
-		allocation[p.instrumentType] += p.valueNumber;
+		const key = sortRules.includes(p.instrumentType) ? p.instrumentType : "other";
+		allocation[key] = (allocation[key] || 0) + p.valueNumber;
 	});
 
-	const allocationPercent = Object.entries(allocation).map(([type, value]) => ({
+	const grossAllocationBase = Math.max(
+		portfolioStructureOrder.reduce(
+			(sum, type) => sum + Math.abs(allocation[type] || 0),
+			0,
+		),
+		1,
+	);
+	const allocationPercent = portfolioStructureOrder.map((type) => ({
 		type,
-		percent: portfolioTotal ? (value / portfolioTotal) * 100 : 0,
+		percent: (Math.abs(allocation[type] || 0) / grossAllocationBase) * 100,
 	}));
-	const allocationDetails = sortRules
+	const allocationDetails = portfolioStructureOrder
 		.map((type) => {
 			const value = allocation[type] || 0;
-			const percent = portfolioTotal ? (value / portfolioTotal) * 100 : 0;
+			const percent = (Math.abs(value) / grossAllocationBase) * 100;
 			const positionsCount = positionsWithValue.filter(
-				(p) => p.instrumentType === type,
+				(p) =>
+					type === "other"
+						? !sortRules.includes(p.instrumentType)
+						: p.instrumentType === type,
 			).length;
 			return { type, value, percent, positionsCount };
 		})

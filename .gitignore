@@ -1,5 +1,8 @@
 
 /node_modules/
+/frontend/node_modules/
+/backend/.gocache/
+/backend/tmp/
 
 .env
 .env.*

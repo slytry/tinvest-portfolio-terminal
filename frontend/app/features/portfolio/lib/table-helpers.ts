@@ -1,4 +1,4 @@
-import type { MoneyValue, Quotation } from "@tinkoff/invest-js-grpc-web";
+import type { MoneyValue, Quotation } from "~/api/portfolios";
 
 export const formatPrice = (value?: Quotation | MoneyValue): string => {
 	if (!value) return "–";
@@ -146,6 +146,7 @@ export const typeToRussian = {
 	bond: "Облигации",
 	etf: "Фонды",
 	currency: "Валюта",
+	other: "Прочее",
 };
 
 export const typeColors: Record<string, string> = {
@@ -153,4 +154,5 @@ export const typeColors: Record<string, string> = {
 	bond: "orange",
 	etf: "grape",
 	currency: "teal",
+	other: "gray",
 };
